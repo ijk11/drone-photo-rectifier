@@ -98,6 +98,7 @@ class ImageView(QGraphicsView):
         self._selected: list[str] = []
         self._hover: str | None = None
         self._cursor_scene = QPointF()
+        self._cursor_valid = False
         self._dragging: str | None = None
         self._drag_moved = False
         self._panning = False
@@ -353,6 +354,7 @@ class ImageView(QGraphicsView):
 
         scene = self._to_scene(pos)
         self._cursor_scene = scene
+        self._cursor_valid = True
         self.cursorMoved.emit(scene.x(), scene.y())
 
         if self._dragging and self.project is not None:
@@ -445,7 +447,7 @@ class ImageView(QGraphicsView):
         self._draw_observations(painter, stats)
         self._draw_pending(painter)
         self._draw_points(painter)
-        if self.show_loupe and self.underMouse():
+        if self.show_loupe and self._cursor_valid and self.underMouse():
             self._draw_loupe(painter)
 
         painter.setWorldMatrixEnabled(True)
@@ -584,6 +586,8 @@ class ImageView(QGraphicsView):
             return
         # 커서가 사진 밖이면 확대경은 의미가 없다(검은 사각형만 남는다).
         cs = self._cursor_scene
+        if not self._cursor_valid:
+            return
         if not (0 <= cs.x() <= self._image.width() and 0 <= cs.y() <= self._image.height()):
             return
         cur = self._to_view(cs.x(), cs.y())

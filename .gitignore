@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+.pytest_cache/
+.coverage
+htmlcov/
+# 작업 산출물
+out/
+*.drproj.bak
+*_rectified.png
+*_rectified.pgw
+
+# 합성 예제는 `python -m dronerect.tools.make_synthetic` 로 언제든 재생성되고,
+# .drproj 는 이 컴퓨터의 절대경로를 담고 있어 커밋하지 않는다.
+samples/*
+!samples/README.md

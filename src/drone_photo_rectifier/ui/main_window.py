@@ -39,62 +39,48 @@ from ..core.constraints import KIND_ANGLE, KIND_DISTANCE, KIND_INFO, Observation
 from ..core.imageio import focal_length_px, imread, imwrite, read_exif
 from ..core.project import FILE_SUFFIX, Feature, Project
 from ..core.rectify import plan_grid, rectify_image, scale_stats, suggest_gsd
-from ..core.solver import adjust
+from ..core.solver import adjust, verdict
 from ..core.transform import PlaneModel, solve_gauge
+from . import help_text as H
 from .dialogs import GaugeDialog, ObservationDialog
 from .image_view import MODE_ADD, MODE_PICK, MODE_SELECT, ImageView
-from .panels import ExportPanel, ObservationTable, PointTable, SolvePanel
+from .panels import ExportPanel, GuidePanel, ObservationTable, PointTable, SolvePanel
 from .result_view import ResultView
 
 IMAGE_FILTER = "이미지 (*.jpg *.jpeg *.png *.tif *.tiff *.bmp);;모든 파일 (*.*)"
 PROJECT_FILTER = f"drone-photo-rectifier 프로젝트 (*{FILE_SUFFIX});;모든 파일 (*.*)"
 
+#: ``docs/사용설명서.md`` 를 못 찾았을 때만 쓰는 최소 안내.
+#: 설명서 본문을 여기에 복사해 두면 반드시 어긋나므로 짧게 유지한다.
 HELP_HTML = """
-<h2>사용법</h2>
+<h2>빠른 안내</h2>
 <ol>
-<li><b>사진 열기</b> (Ctrl+O) — 드론/항공 사진을 불러옵니다.</li>
-<li><b>실측 거리 입력</b> — 오른쪽 [관측] 탭에서 <b>실측 거리</b>를 누르고,
-    사진에서 실제로 줄자를 댄 두 지점을 클릭한 뒤 잰 값을 입력합니다.
-    같은 방식으로 계속 추가할 수 있습니다(Esc 로 중단).</li>
-<li><b>기하 구속 추가(권장)</b> — 도로 경계·건물 외곽처럼 실제로 직각이거나
-    평행한 곳이 있으면 <b>직각/평행</b>을 추가하세요. 줄자 없이 얻는 정보이며
-    해를 크게 안정시킵니다.</li>
-<li><b>보정 실행</b> (F5) — 원근(호모그래피)과 렌즈 방사왜곡을 동시에
-    추정합니다.</li>
-<li><b>진단 확인</b> — 잔차·잉여도·조건수를 봅니다. 빨간 항목은 조대오차
-    의심이므로 실측값 오타나 점 위치를 확인하세요.</li>
-<li><b>결과 생성</b> — [출력] 탭에서 정사보정 래스터를 만들고, 이미지(+월드파일),
-    DXF, 성과표, 리포트로 내보냅니다.</li>
+<li><b>사진 열기</b> (Ctrl+O)</li>
+<li><b>실측 거리 추가</b> (D) - 줄자로 잰 두 지점을 클릭하고 값을 입력.
+    최소 5개, 12개 이상 권장</li>
+<li><b>보정 실행</b> (F5)</li>
+<li>[관측] 탭에서 빨간 줄이 있으면 실측값 오타나 점 위치를 확인</li>
+<li>[출력] 탭에서 정사영상을 만들고 내보내기</li>
 </ol>
-
-<h3>정확도를 높이는 요령</h3>
-<ul>
-<li>실측 선분을 <b>사진 네 귀퉁이까지 고르게</b> 배치하세요. 한쪽에 몰리면
-    조건수가 커져 반대편의 정확도가 급격히 나빠집니다.</li>
-<li>방향을 섞으세요. 가로 방향만 재면 세로 축척이 결정되지 않습니다.</li>
-<li>길이가 <b>서로 많이 다른</b> 구간을 섞으면 축척과 왜곡이 잘 분리됩니다.</li>
-<li>최소 7개(자동 선택 기준 5~9개) 이상, 검증을 위해 그보다 3~5개 더
-    잡는 것을 권합니다.</li>
-<li>점은 <b>확대해서</b> 찍으세요. 확대경과 코너 스냅이 켜져 있습니다.
-    방향키로 0.1 px, Ctrl+방향키로 0.01 px 미세이동합니다.</li>
-</ul>
-
-<h3>꼭 알아야 할 전제</h3>
 <p>이 보정은 대상이 <b>하나의 평면(지면)</b> 위에 있다고 가정합니다.
-건물 벽면·수목·적치물처럼 <b>높이가 있는 것은 기복변위</b> 때문에 보정 후에도
-위치가 어긋납니다. 실측 기준선은 반드시 지면에서 잡으세요.
-지형이 크게 경사지거나 단차가 있으면 구역을 나눠 각각 보정해야 합니다.</p>
-
-<h3>마우스/키보드</h3>
-<table cellpadding="4">
-<tr><td>휠</td><td>커서 기준 확대/축소</td></tr>
-<tr><td>가운데 버튼 드래그</td><td>이동(팬)</td></tr>
-<tr><td>오른쪽 버튼</td><td>선택 중인 점 하나 취소</td></tr>
-<tr><td>Esc</td><td>진행 중인 입력 취소</td></tr>
-<tr><td>방향키</td><td>선택한 점 0.1 px 이동 (Shift 1 px, Ctrl 0.01 px)</td></tr>
-<tr><td>Ctrl+0 / Ctrl+1</td><td>화면 맞춤 / 100%</td></tr>
-</table>
+높이가 있는 것은 보정 후에도 위치가 어긋납니다.</p>
+<p style="color:#999;">전체 사용설명서를 찾지 못했습니다.
+저장소의 <code>docs/사용설명서.md</code> 를 열어 보세요.</p>
 """
+
+
+def manual_path() -> Path | None:
+    """``docs/사용설명서.md`` 를 찾는다.
+
+    저장소에서 바로 실행하는 것을 기본으로 보고 위로 거슬러 올라가며 찾되,
+    못 찾으면 ``None`` 을 돌려주고 호출부가 내장 요약으로 대체한다.
+    """
+    here = Path(__file__).resolve()
+    for base in here.parents:
+        cand = base / "docs" / "사용설명서.md"
+        if cand.is_file():
+            return cand
+    return None
 
 
 class MainWindow(QMainWindow):
@@ -127,12 +113,22 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.result_view, "보정 결과")
         self.setCentralWidget(self.tabs)
 
+        self.guide = GuidePanel(self)
+        dock_g = QDockWidget("진행 안내", self)
+        dock_g.setWidget(self.guide)
+        dock_g.setObjectName("dock_guide")
+        dock_g.setMinimumWidth(380)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock_g)
+
         self.point_table = PointTable(self)
         dock_l = QDockWidget("점 목록", self)
         dock_l.setWidget(self.point_table)
         dock_l.setObjectName("dock_points")
         dock_l.setMinimumWidth(380)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, dock_l)
+        # 안내판이 위, 점 목록이 아래. 안내판은 짧으므로 공간을 적게 준다.
+        self.splitDockWidget(dock_g, dock_l, Qt.Orientation.Vertical)
+        self.resizeDocks([dock_g, dock_l], [320, 560], Qt.Orientation.Vertical)
 
         self.obs_table = ObservationTable(self)
         self.solve_panel = SolvePanel(self)
@@ -167,6 +163,8 @@ class MainWindow(QMainWindow):
         self.result_view.measured.connect(lambda s: self.lbl_measure.setText(s))
         self.result_view.statusMessage.connect(lambda s: self.lbl_m.setText(s))
 
+        self.guide.actionRequested.connect(self._on_guide_action)
+
         self.point_table.pointSelected.connect(self._on_table_point_selected)
         self.point_table.pointEdited.connect(self._on_point_edited)
         self.point_table.deleteRequested.connect(self._delete_points)
@@ -188,40 +186,48 @@ class MainWindow(QMainWindow):
 
     def _build_actions(self) -> None:
         m_file = self.menuBar().addMenu("파일(&F)")
-        self._act(m_file, "사진 열기...", self._open_image, QKeySequence.StandardKey.Open)
-        self._act(m_file, "프로젝트 열기...", self._open_project, "Ctrl+Shift+O")
+        self._act(m_file, "사진 열기...", self._open_image, QKeySequence.StandardKey.Open, tip=H.ACTION_TIPS["open_image"])
+        self._act(m_file, "프로젝트 열기...", self._open_project, "Ctrl+Shift+O", tip=H.ACTION_TIPS["open_project"])
         m_file.addSeparator()
-        self._act(m_file, "저장", self._save_project, QKeySequence.StandardKey.Save)
-        self._act(m_file, "다른 이름으로 저장...", self._save_project_as, "Ctrl+Shift+S")
+        self._act(m_file, "저장", self._save_project, QKeySequence.StandardKey.Save, tip=H.ACTION_TIPS["save"])
+        self._act(m_file, "다른 이름으로 저장...", self._save_project_as, "Ctrl+Shift+S", tip=H.ACTION_TIPS["save_as"])
         m_file.addSeparator()
-        self._act(m_file, "검증용 합성 예제 만들기...", self._make_sample)
+        self._act(m_file, "검증용 합성 예제 만들기...", self._make_sample, tip=H.ACTION_TIPS["make_sample"])
         m_file.addSeparator()
-        self._act(m_file, "종료", self.close, "Ctrl+Q")
+        self._act(m_file, "종료", self.close, "Ctrl+Q", tip=H.ACTION_TIPS["quit"])
 
         m_edit = self.menuBar().addMenu("편집(&E)")
-        self._act(m_edit, "실행 취소", self._do_undo, QKeySequence.StandardKey.Undo)
-        self._act(m_edit, "다시 실행", self._do_redo, QKeySequence.StandardKey.Redo)
+        self._act(m_edit, "실행 취소", self._do_undo, QKeySequence.StandardKey.Undo, tip=H.ACTION_TIPS["undo"])
+        self._act(m_edit, "다시 실행", self._do_redo, QKeySequence.StandardKey.Redo, tip=H.ACTION_TIPS["redo"])
         m_edit.addSeparator()
         self._act(m_edit, "선택한 점 삭제", lambda: self._delete_points(self.view.selected_ids()),
-                  QKeySequence.StandardKey.Delete)
+                  QKeySequence.StandardKey.Delete, tip=H.ACTION_TIPS["delete_points"])
 
         m_view = self.menuBar().addMenu("보기(&V)")
-        self._act(m_view, "화면에 맞춤", self._fit, "Ctrl+0")
-        self._act(m_view, "100%", lambda: self.view.zoom_to(1.0), "Ctrl+1")
+        self._act(m_view, "화면에 맞춤", self._fit, "Ctrl+0", tip=H.ACTION_TIPS["fit"])
+        self._act(m_view, "100%", lambda: self.view.zoom_to(1.0), "Ctrl+1", tip=H.ACTION_TIPS["zoom100"])
         m_view.addSeparator()
-        self.act_labels = self._act(m_view, "라벨 표시", self._toggle_labels, checkable=True, checked=True)
-        self.act_loupe = self._act(m_view, "확대경 표시", self._toggle_loupe, checkable=True, checked=True)
+        self.act_labels = self._act(m_view, "라벨 표시", self._toggle_labels,
+                                    checkable=True, checked=True,
+                                    tip=H.ACTION_TIPS["labels"])
+        self.act_loupe = self._act(m_view, "확대경 표시", self._toggle_loupe,
+                                   checkable=True, checked=True,
+                                   tip=H.ACTION_TIPS["loupe"])
         self.act_snap = self._act(m_view, "코너 서브픽셀 스냅", self._toggle_snap,
-                                  checkable=True, checked=True)
+                                  checkable=True, checked=True,
+                                  tip=H.ACTION_TIPS["snap"])
 
         m_solve = self.menuBar().addMenu("보정(&C)")
         self._act(m_solve, "보정 실행", lambda: self._solve(self.solve_panel.free_names(),
-                                                            self.solve_panel.chk_robust.isChecked()), "F5")
-        self._act(m_solve, "좌표축 정렬...", self._edit_gauge)
+                                                            self.solve_panel.chk_robust.isChecked()),
+                  "F5", tip=H.ACTION_TIPS["solve"])
+        self._act(m_solve, "좌표축 정렬...", self._edit_gauge, tip=H.ACTION_TIPS["gauge"])
 
         m_help = self.menuBar().addMenu("도움말(&H)")
-        self._act(m_help, "사용법", self._show_help, "F1")
-        self._act(m_help, "정보", self._show_about)
+        self._act(m_help, "사용설명서", self._show_manual, "F1", tip=H.ACTION_TIPS["manual"])
+        self._act(m_help, "용어 사전", self._show_glossary, tip=H.ACTION_TIPS["glossary"])
+        m_help.addSeparator()
+        self._act(m_help, "정보", self._show_about, tip=H.ACTION_TIPS["about"])
 
         tb = self.addToolBar("도구")
         tb.setIconSize(QSize(18, 18))
@@ -229,34 +235,49 @@ class MainWindow(QMainWindow):
         group = QActionGroup(self)
         group.setExclusive(True)
         self.act_select = self._act(tb, "선택/이동", lambda: self._set_mode(MODE_SELECT),
-                                    "S", checkable=True, checked=True)
+                                    "S", checkable=True, checked=True,
+                                    tip=H.ACTION_TIPS["mode_select"])
         self.act_add = self._act(tb, "점 추가", lambda: self._set_mode(MODE_ADD),
-                                 "A", checkable=True)
+                                 "A", checkable=True, tip=H.ACTION_TIPS["mode_add"])
         for a in (self.act_select, self.act_add):
             group.addAction(a)
         tb.addSeparator()
-        self._act(tb, "실측 거리 추가", lambda: self._start_observation(KIND_DISTANCE), "D")
-        self._act(tb, "도면 요소 추가", self._start_feature, "G")
+        self._act(tb, "실측 거리 추가", lambda: self._start_observation(KIND_DISTANCE),
+                  "D", tip=H.ACTION_TIPS["add_distance"])
+        self._act(tb, "도면 요소 추가", self._start_feature, "G",
+                  tip=H.ACTION_TIPS["add_feature"])
         tb.addSeparator()
         self._act(tb, "보정 실행", lambda: self._solve(self.solve_panel.free_names(),
-                                                       self.solve_panel.chk_robust.isChecked()))
+                                                       self.solve_panel.chk_robust.isChecked()),
+                  tip=H.ACTION_TIPS["solve"])
 
         tb2 = self.addToolBar("결과")
         tb2.setObjectName("result_toolbar")
         self.act_measure_dist = self._act(tb2, "결과에서 거리 측정",
                                           lambda: self.result_view.set_mode("distance"),
-                                          checkable=True, checked=True)
+                                          checkable=True, checked=True,
+                                          tip=H.ACTION_TIPS["measure_dist"])
         self.act_measure_area = self._act(tb2, "결과에서 면적 측정",
                                           lambda: self.result_view.set_mode("area"),
-                                          checkable=True)
+                                          checkable=True,
+                                          tip=H.ACTION_TIPS["measure_area"])
         g2 = QActionGroup(self)
         g2.setExclusive(True)
         g2.addAction(self.act_measure_dist)
         g2.addAction(self.act_measure_area)
 
-    def _act(self, parent, text, slot, shortcut=None, checkable=False, checked=False):
+    def _act(self, parent, text, slot, shortcut=None, checkable=False,
+             checked=False, tip=None):
+        """메뉴/툴바 항목 하나를 만든다.
+
+        ``tip`` 은 툴팁과 상태표시줄 설명에 함께 쓴다. 아이콘 없이 글자만
+        있는 툴바라 이름만으로는 무엇을 하는지 알기 어렵다.
+        """
         a = QAction(text, self)
         a.triggered.connect(lambda *_: slot())
+        if tip:
+            a.setToolTip(tip)
+            a.setStatusTip(tip.replace('\n', " "))
         if shortcut:
             a.setShortcut(shortcut)
         if checkable:
@@ -299,8 +320,48 @@ class MainWindow(QMainWindow):
         self.point_table.refresh(self.project, model)
         self.obs_table.refresh(self.project, self.result)
         self.view.refresh()
+        self._refresh_guide()
         self._update_title()
         self._update_gsd(self.export_panel.mode_key())
+
+    def _refresh_guide(self) -> None:
+        """현재 상태를 안내판이 이해하는 형태로 넘긴다."""
+        obs = [o for o in self.project.observations if o.enabled]
+        self.guide.refresh(H.GuideState(
+            has_image=self.image is not None,
+            n_points=len(self.project.points),
+            n_distance=sum(1 for o in obs if o.kind == KIND_DISTANCE),
+            n_geometry=sum(1 for o in obs if o.kind != KIND_DISTANCE),
+            solved=self.result is not None,
+            verdict_level=(verdict(self.result).level if self.result else ""),
+            n_outliers=(sum(1 for st in self.result.obs_stats if st.outlier)
+                        if self.result else 0),
+            dof=(self.result.dof if self.result else 0),
+            has_raster=self.rect_image is not None,
+        ))
+
+    def _on_guide_action(self, key: str) -> None:
+        """안내판의 링크/버튼을 실제 동작으로 잇는다."""
+        if key == "open_image":
+            self._open_image()
+        elif key == "make_sample":
+            self._make_sample()
+        elif key == "add_distance":
+            self._start_observation(KIND_DISTANCE)
+        elif key == "solve":
+            self._solve(self.solve_panel.free_names(),
+                        self.solve_panel.chk_robust.isChecked())
+        elif key == "disable_outliers":
+            self._disable_outliers()
+        elif key == "preview":
+            self.right_tabs.setCurrentWidget(self.export_panel)
+            self._make_rectified(self.export_panel.gsd_m(), self.export_panel.interp())
+        elif key == "export":
+            self.right_tabs.setCurrentWidget(self.export_panel)
+        elif key == "manual":
+            self._show_manual()
+        elif key == "glossary":
+            self._show_glossary()
 
     def _update_title(self) -> None:
         name = Path(self.project.path).name if self.project.path else "(저장 안 됨)"
@@ -851,18 +912,38 @@ class MainWindow(QMainWindow):
     def _toggle_snap(self) -> None:
         self.view.snap_enabled = self.act_snap.isChecked()
 
-    def _show_help(self) -> None:
+    def _doc_dialog(self, title: str, size: tuple[int, int]) -> tuple[QDialog, QTextBrowser]:
         dlg = QDialog(self)
-        dlg.setWindowTitle("사용법")
-        dlg.resize(720, 640)
+        dlg.setWindowTitle(title)
+        dlg.resize(*size)
         tb = QTextBrowser(dlg)
-        tb.setHtml(HELP_HTML)
+        tb.setOpenExternalLinks(True)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.button(QDialogButtonBox.StandardButton.Close).setText("닫기")
         bb.rejected.connect(dlg.reject)
         bb.accepted.connect(dlg.accept)
         lay = QVBoxLayout(dlg)
         lay.addWidget(tb)
         lay.addWidget(bb)
+        return dlg, tb
+
+    def _show_manual(self) -> None:
+        """저장소의 사용설명서를 그대로 띄운다.
+
+        설명서를 두 벌(파일 + 코드 안 HTML) 관리하면 반드시 어긋나므로,
+        마크다운 원본 하나만 두고 Qt 가 렌더링하게 한다.
+        """
+        dlg, tb = self._doc_dialog("사용설명서", (940, 760))
+        path = manual_path()
+        if path is not None:
+            tb.setMarkdown(path.read_text(encoding="utf-8"))
+        else:
+            tb.setHtml(HELP_HTML)
+        dlg.exec()
+
+    def _show_glossary(self) -> None:
+        dlg, tb = self._doc_dialog("용어 사전", (760, 680))
+        tb.setHtml(H.glossary_html())
         dlg.exec()
 
     def _show_about(self) -> None:

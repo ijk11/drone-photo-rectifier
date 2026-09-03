@@ -35,6 +35,7 @@ from PySide6.QtWidgets import QGraphicsPixmapItem, QGraphicsScene, QGraphicsView
 
 from ..core.constraints import KIND_DISTANCE
 from ..core.solver import OUTLIER_THRESHOLD
+from .help_text import EMPTY_CANVAS_LINES
 
 __all__ = ["ImageView", "MODE_SELECT", "MODE_ADD", "MODE_PICK"]
 
@@ -432,7 +433,10 @@ class ImageView(QGraphicsView):
 
     # ------------------------------------------------------------ 오버레이
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
-        if self.project is None or self._pixmap_item is None:
+        if self._pixmap_item is None:
+            self._draw_empty_hint(painter)
+            return
+        if self.project is None:
             return
         painter.save()
         painter.setWorldMatrixEnabled(False)
@@ -454,6 +458,27 @@ class ImageView(QGraphicsView):
         painter.restore()
 
     # -- 개별 요소 --------------------------------------------------------
+    def _draw_empty_hint(self, painter: QPainter) -> None:
+        """사진이 없을 때 빈 화면 대신 무엇을 하면 되는지 알려 준다.
+
+        처음 실행하면 회색 캔버스만 보여서 어디서 시작할지 알 수 없다.
+        """
+        painter.save()
+        painter.setWorldMatrixEnabled(False)
+        w, h = self.viewport().width(), self.viewport().height()
+        y = h // 2 - 11 * len(EMPTY_CANVAS_LINES) // 2
+        for i, line in enumerate(EMPTY_CANVAS_LINES):
+            if not line:
+                y += 11
+                continue
+            first = i == 0
+            painter.setFont(_font(13 if first else 9, bold=first))
+            painter.setPen(QColor(190, 198, 206) if first else QColor(130, 138, 146))
+            painter.drawText(QRectF(0, y, w, 26), Qt.AlignmentFlag.AlignHCenter, line)
+            y += 26 if first else 20
+        painter.setWorldMatrixEnabled(True)
+        painter.restore()
+
     def _draw_horizon(self, painter: QPainter) -> None:
         if self._model is None or not getattr(self.project, "solved", False):
             return

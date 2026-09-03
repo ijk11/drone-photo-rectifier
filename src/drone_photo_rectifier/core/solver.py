@@ -48,11 +48,33 @@ __all__ = [
     "initial_params",
     "adjust",
     "distance_with_uncertainty",
+    "Verdict",
+    "verdict",
     "OUTLIER_THRESHOLD",
 ]
 
 #: Baarda 데이터 스누핑 임계값 (유의수준 0.1%).
 OUTLIER_THRESHOLD = 3.29
+
+#: scipy 종료 메시지를 사용자에게 보일 한국어로 바꾼다.
+#: 원문을 그대로 두면 "ftol termination condition" 같은 문구가 화면에 뜬다.
+_TERMINATION_KO = {
+    "ftol": "잔차가 더 줄지 않는 지점까지 수렴했습니다.",
+    "xtol": "파라미터가 더 움직이지 않는 지점까지 수렴했습니다.",
+    "gtol": "기울기가 0에 가까워 수렴했습니다.",
+    "maxfev": "반복 한도에 걸렸습니다. 관측이나 초기값을 확인하세요.",
+}
+
+
+def _termination_ko(message: str) -> str:
+    """scipy 종료 사유를 한국어 한 문장으로."""
+    low = message.lower()
+    for key, text in _TERMINATION_KO.items():
+        if key in low:
+            return text
+    if "maximum number" in low:
+        return _TERMINATION_KO["maxfev"]
+    return message
 
 #: 원근 분모 w 의 하한. 이보다 작아지면 소실선에 접근한 것으로 보고 벌점.
 _W_MIN = 0.05
@@ -394,7 +416,7 @@ def adjust(
 
     return AdjustmentResult(
         ok=bool(res.success),
-        message=str(res.message),
+        message=_termination_ko(str(res.message)),
         params=params,
         free_names=free_names,
         n_obs=n_obs,
@@ -452,3 +474,88 @@ def distance_with_uncertainty(
         g[j] = (dist_of(xp) - dist_of(xm)) / (2 * h)
     var = float(g @ result.cov @ g)
     return d, math.sqrt(max(var, 0.0))
+
+
+# ------------------------------------------------------- 평이한 말로 된 판정
+@dataclass
+class Verdict:
+    """조정 결과를 통계 용어 없이 한 줄로 요약한 것.
+
+    UI 요약창과 검사 리포트가 같은 문장을 쓰도록 코어에 둔다. 숫자만 보고는
+    "이 결과를 믿어도 되는가"를 판단하기 어렵다는 사용자 피드백에서 나왔다.
+    """
+
+    level: str
+    """``good`` / ``warn`` / ``bad``. UI 색상 결정용."""
+    headline: str
+    """한 줄 판정."""
+    accuracy: float
+    """실용 정확도 추정치 [m]. 교차검증 RMS 를 우선 쓴다. 없으면 NaN."""
+    advice: list[str]
+    """다음에 무엇을 하면 되는지."""
+
+    @property
+    def icon(self) -> str:
+        return {"good": "\u2714", "warn": "\u26a0", "bad": "\u2716"}[self.level]
+
+
+def verdict(result: "AdjustmentResult | None") -> Verdict:
+    """조정 결과를 사용자가 바로 이해할 수 있는 판정으로 바꾼다."""
+    if result is None:
+        return Verdict("warn", "아직 보정하지 않았습니다.", float("nan"),
+                       ["실측 거리를 입력한 뒤 [보정 실행]을 누르세요."])
+    if not result.ok:
+        return Verdict("bad", f"보정에 실패했습니다 - {result.message}", float("nan"),
+                       ["점을 엉뚱한 곳에 찍지 않았는지 확인하세요.",
+                        "실측값의 단위가 모두 미터인지 확인하세요.",
+                        "실측 선분을 더 추가하면 해가 안정됩니다."])
+
+    # 실용 정확도: 자기 자신을 맞춘 잔차보다 교차검증 값이 정직하다.
+    acc = result.press_rms_length
+    if not math.isfinite(acc):
+        acc = result.rms_length
+
+    advice: list[str] = []
+    level = "good"
+
+    if result.dof <= 0:
+        level = "warn"
+        head = "검증할 수 없는 결과입니다 (잉여관측 없음)."
+        advice.append(
+            f"관측 {result.n_obs}개로 미지수 {result.n_params}개를 풀어 잔차가 "
+            "항상 0으로 나옵니다. 맞았는지 틀렸는지 알 수 없습니다.")
+        advice.append("실측 선분을 3~5개 더 추가하면 정확도를 검증할 수 있습니다.")
+        return Verdict(level, head, float("nan"), advice)
+
+    n_out = sum(1 for s in result.obs_stats if s.outlier)
+    blind = sum(1 for s in result.obs_stats if s.enabled and s.redundancy < 0.05)
+
+    if n_out:
+        level = "warn"
+        head = f"조대오차가 의심되는 관측이 {n_out}건 있습니다."
+        advice.append("[관측] 탭에서 빨간 줄을 확인하세요. 실측값 오타이거나 "
+                      "점을 잘못 찍었을 가능성이 큽니다.")
+        advice.append("확인이 어려우면 [조대오차 의심 관측 끄고 재계산]을 누르세요.")
+    elif math.isfinite(result.sigma0) and result.sigma0 > 3.0:
+        level = "warn"
+        head = "실측값과 모델이 입력한 오차범위보다 많이 어긋납니다."
+        advice.append("실측값 자체의 오차를 너무 작게 잡았거나, 대상이 하나의 "
+                      "평면이 아닐 수 있습니다(높이차·경사).")
+        advice.append("높이가 있는 곳(건물 상단, 적치물)에서 잰 구간이 있으면 빼세요.")
+    elif math.isfinite(result.cond) and result.cond > 1e8:
+        level = "warn"
+        head = "실측 배치가 한쪽으로 치우쳐 해가 불안정합니다."
+        advice.append("사진의 반대편 구석에도 실측 선분을 추가하세요.")
+        advice.append("가로 방향만 재지 말고 세로·대각 방향도 섞으세요.")
+    else:
+        head = "보정 결과가 양호합니다."
+
+    if math.isfinite(acc):
+        head += f"  현장 기준 오차 약 \u00b1{acc * 1000:.0f} mm."
+    if blind and level == "good":
+        advice.append(
+            f"다만 검증되지 않는 관측이 {blind}건 있습니다(잉여도 0에 가까움). "
+            "그 부근은 틀려도 드러나지 않으니 근처에 실측을 하나 더 넣으면 좋습니다.")
+    if level == "good" and not advice:
+        advice.append("[출력] 탭에서 정사영상을 만들고 내보내면 됩니다.")
+    return Verdict(level, head, acc, advice)

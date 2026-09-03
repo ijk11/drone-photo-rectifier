@@ -17,11 +17,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -29,11 +29,29 @@ from PySide6.QtWidgets import (
 from ..core.constraints import KIND_ANGLE, KIND_DISTANCE, KIND_INFO
 from ..core.params import PARAM_LABELS
 from ..core.rectify import INTERPOLATIONS
-from ..core.solver import OUTLIER_THRESHOLD
+from ..core.solver import OUTLIER_THRESHOLD, verdict
+from . import help_text as H
 
 _C_BAD = QColor(255, 120, 120)
 _C_WARN = QColor(255, 200, 120)
 _C_DIM = QColor(150, 150, 150)
+
+
+def _head_tips(table: QTableWidget, tips: dict[str, str]) -> None:
+    """열 머리글에 설명을 붙인다.
+
+    표의 열 이름은 자리가 좁아 줄임말이 될 수밖에 없다(σ, w, 잉여도).
+    머리글에 마우스를 올리면 뜻이 나오게 해 두면 설명서를 찾지 않아도 된다.
+    """
+    for c in range(table.columnCount()):
+        item = table.horizontalHeaderItem(c)
+        if item is not None and item.text() in tips:
+            item.setToolTip(tips[item.text()])
+
+
+def _esc(text: str) -> str:
+    return (text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            or "&nbsp;")
 
 
 def _ro(text: str) -> QTableWidgetItem:
@@ -59,6 +77,7 @@ class PointTable(QWidget):
         self._updating = False
         self.table = QTableWidget(0, 4, self)
         self.table.setHorizontalHeaderLabels(["이름", "u [px]", "v [px]", "미터 좌표"])
+        _head_tips(self.table, H.POINT_COLUMNS_HELP)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked
@@ -70,6 +89,7 @@ class PointTable(QWidget):
         self.table.itemSelectionChanged.connect(self._on_selected)
 
         self.btn_delete = QPushButton("선택 점 삭제")
+        self.btn_delete.setToolTip(H.ACTION_TIPS["delete_points"])
         self.btn_delete.clicked.connect(
             lambda: self.deleteRequested.emit(self.selected_ids())
         )
@@ -155,17 +175,22 @@ class ObservationTable(QWidget):
         super().__init__(parent)
         self._updating = False
 
-        add_box = QGroupBox("구속 추가")
+        add_box = QGroupBox("관측 추가 — 버튼을 누른 뒤 사진에서 점을 클릭하세요")
         grid = QGridLayout(add_box)
         grid.setContentsMargins(6, 6, 6, 6)
         for i, (kind, (title, npts, unit, tip)) in enumerate(KIND_INFO.items()):
-            b = QPushButton(title)
-            b.setToolTip(f"{tip}\n필요한 점: {npts}개")
+            star = " ★" if kind == KIND_DISTANCE else ""
+            b = QPushButton(title + star)
+            extra = ("\n\n★ 가장 많이 쓰는 기능입니다. 이것만 있어도 보정됩니다."
+                     if kind == KIND_DISTANCE
+                     else "\n줄자를 대지 않고 얻는 정보라 정확도가 좋아집니다.")
+            b.setToolTip(f"{tip}\n\n사진에서 점 {npts}개를 차례로 클릭합니다." + extra)
             b.clicked.connect(lambda _=False, k=kind: self.addRequested.emit(k))
             grid.addWidget(b, i // 3, i % 3)
 
         self.table = QTableWidget(0, len(self.COLS), self)
         self.table.setHorizontalHeaderLabels(self.COLS)
+        _head_tips(self.table, H.OBS_COLUMNS_HELP)
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked
@@ -179,16 +204,21 @@ class ObservationTable(QWidget):
         self.table.itemDoubleClicked.connect(self._on_double)
 
         self.btn_del = QPushButton("선택 삭제")
+        self.btn_del.setToolTip("고른 관측을 완전히 지웁니다.")
         self.btn_del.clicked.connect(lambda: self.deleteRequested.emit(self.selected_ids()))
         self.btn_disable = QPushButton("선택 사용 해제")
+        self.btn_disable.setToolTip(
+            "지우지 않고 계산에서만 뺍니다.\n"
+            "빼 보고 결과가 어떻게 달라지는지 확인할 때 씁니다.")
         self.btn_disable.clicked.connect(self._disable_selected)
         row = QHBoxLayout()
         row.addWidget(self.btn_del)
         row.addWidget(self.btn_disable)
 
         self.hint = QLabel(
-            "잔차 색: 주황 = 주의(|w|>2), 빨강 = 조대오차 의심(|w|>3.29).\n"
-            "잉여도가 0에 가까운 관측은 다른 관측으로 검증되지 않습니다."
+            "표의 열 이름에 마우스를 올리면 뜻이 나옵니다.\n"
+            "빨간 줄 = 실측값 오타나 점 위치 실수가 의심되는 관측.\n"
+            "'점' 칸을 더블클릭하면 사진에서 그 위치로 이동합니다."
         )
         self.hint.setWordWrap(True)
         self.hint.setStyleSheet("color:#999;")
@@ -308,11 +338,11 @@ class SolvePanel(QWidget):
     ORDER = ["l1", "l2", "b", "log_a", "log_s", "k1", "k2", "k3", "p1", "p2",
              "cx_off", "cy_off"]
     GROUPS = {
-        "원근 (필수)": ["l1", "l2"],
-        "아핀 / 축척 (필수)": ["b", "log_a", "log_s"],
-        "렌즈 방사왜곡": ["k1", "k2", "k3"],
-        "렌즈 접선왜곡": ["p1", "p2"],
-        "주점 보정": ["cx_off", "cy_off"],
+        "기울어 찍힌 것 펴기 (원근 · 필수)": ["l1", "l2"],
+        "축척 맞추기 (아핀 · 필수)": ["b", "log_a", "log_s"],
+        "렌즈 휘어짐 펴기 (방사왜곡)": ["k1", "k2", "k3"],
+        "렌즈 비틀림 (접선왜곡)": ["p1", "p2"],
+        "렌즈 중심 어긋남 (주점)": ["cx_off", "cy_off"],
     }
 
     def __init__(self, parent=None):
@@ -327,7 +357,10 @@ class SolvePanel(QWidget):
         )
         self.chk_auto.toggled.connect(self._sync_enabled)
 
-        param_box = QGroupBox("자유 파라미터")
+        param_box = QGroupBox("무엇을 바로잡을지 (자유 파라미터)")
+        param_box.setToolTip(
+            "보통은 손댈 필요가 없습니다. 아래 [자동 선택]이 켜져 있으면\n"
+            "실측 개수에 맞는 안전한 조합을 프로그램이 고릅니다.")
         pv = QVBoxLayout(param_box)
         pv.setContentsMargins(6, 6, 6, 6)
         pv.addWidget(self.chk_auto)
@@ -341,6 +374,7 @@ class SolvePanel(QWidget):
             row = QHBoxLayout()
             for n in names:
                 cb = QCheckBox(PARAM_LABELS[n][0])
+                cb.setToolTip(H.PARAM_HELP.get(n, ""))
                 cb.setChecked(n in ("l1", "l2", "b", "log_a", "log_s", "k1", "k2"))
                 self.boxes[n] = cb
                 row.addWidget(cb)
@@ -355,25 +389,28 @@ class SolvePanel(QWidget):
 
         self.btn_solve = QPushButton("보정 실행  (F5)")
         self.btn_solve.setMinimumHeight(34)
+        self.btn_solve.setToolTip(H.ACTION_TIPS["solve"])
         f = QFont()
         f.setBold(True)
         self.btn_solve.setFont(f)
         self.btn_solve.clicked.connect(
             lambda: self.solveRequested.emit(self.free_names(), self.chk_robust.isChecked())
         )
-        self.btn_outliers = QPushButton("조대오차 의심 관측 끄고 재계산")
+        self.btn_outliers = QPushButton("의심 관측 끄고 다시 계산")
+        self.btn_outliers.setToolTip(
+            "유별나게 안 맞는 관측(빨간 줄)을 계산에서 빼고 다시 풉니다.\n"
+            "실측값 오타를 찾지 못했을 때 쓰는 응급 처치입니다.\n"
+            "가능하면 원인을 찾아 값을 고치는 편이 낫습니다.")
         self.btn_outliers.clicked.connect(self.disableOutliersRequested.emit)
         self.btn_outliers.setEnabled(False)
         self.btn_gauge = QPushButton("좌표축 정렬 (원점/방향 지정)")
+        self.btn_gauge.setToolTip(H.ACTION_TIPS["gauge"])
         self.btn_gauge.clicked.connect(self.gaugeRequested.emit)
 
-        self.summary = QPlainTextEdit()
-        self.summary.setReadOnly(True)
-        self.summary.setFont(QFont("Consolas", 9))
-        self.summary.setPlaceholderText(
-            "실측 선분을 만들고 [보정 실행]을 누르면 결과가 여기에 표시됩니다."
-        )
-        self.summary.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.summary = QTextBrowser()
+        self.summary.setOpenExternalLinks(False)
+        self.summary.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                   QSizePolicy.Policy.Expanding)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
@@ -396,8 +433,15 @@ class SolvePanel(QWidget):
         return [n for n in self.ORDER if self.boxes[n].isChecked()]
 
     def set_result(self, result) -> None:
+        """판정 한 줄을 맨 위에, 근거가 되는 숫자를 그 아래에 둔다.
+
+        숫자만 늘어놓으면 "그래서 이 결과를 믿어도 되는가"를 사용자가 스스로
+        판단해야 한다. 판정을 먼저 보여 주고, 확인하고 싶은 사람만 숫자를 본다.
+        """
         if result is None:
-            self.summary.setPlainText("")
+            self.summary.setHtml(
+                "<div style='color:#7d848b;'>실측 거리를 입력하고 "
+                "<b>[보정 실행]</b>을 누르면 여기에 결과가 나옵니다.</div>")
             self.btn_outliers.setEnabled(False)
             return
         lines = list(result.summary_lines())
@@ -412,7 +456,12 @@ class SolvePanel(QWidget):
             lines.append("[경고]")
             for w in result.warnings:
                 lines.append("  · " + w)
-        self.summary.setPlainText("\n".join(lines))
+        body = "<br>".join(_esc(x) for x in lines)
+        self.summary.setHtml(
+            H.verdict_html(verdict(result))
+            + "<div style='color:#8b9299;font-size:8pt;'>─── 자세한 수치 ───</div>"
+            + "<div style='font-family:Consolas,monospace;font-size:9pt;"
+              "white-space:pre;'>" + body + "</div>")
         self.btn_outliers.setEnabled(any(s.outlier for s in result.obs_stats))
         if not self.chk_auto.isChecked():
             return
@@ -438,6 +487,12 @@ class ExportPanel(QWidget):
 
         self.cmb_mode = QComboBox()
         self.cmb_mode.addItems(["중앙값 (권장)", "가장 조밀한 곳", "가장 성긴 곳", "직접 입력"])
+        self.cmb_mode.setToolTip(
+            "사진은 위치마다 선명도가 다릅니다. 어느 쪽에 맞춰 출력 해상도를\n"
+            "정할지 고릅니다.\n"
+            "· 중앙값: 무난합니다. 특별한 이유가 없으면 이것.\n"
+            "· 가장 조밀한 곳: 가장 선명한 곳 기준. 파일이 커집니다.\n"
+            "· 가장 성긴 곳: 파일은 작지만 선명한 부분이 뭉개집니다.")
         self.cmb_mode.currentIndexChanged.connect(self._mode_changed)
 
         self.spin_gsd = QDoubleSpinBox()
@@ -452,6 +507,9 @@ class ExportPanel(QWidget):
         self.spin_gsd.valueChanged.connect(lambda _: self.sizeHintChanged())
 
         self.cmb_interp = QComboBox()
+        self.cmb_interp.setToolTip(
+            "픽셀을 다시 그릴 때 쓰는 방식입니다. Lanczos4 가 가장 선명하고\n"
+            "그만큼 느립니다. 보통 그대로 두면 됩니다.")
         self.cmb_interp.addItems(list(INTERPOLATIONS.keys()))
         self.cmb_interp.setCurrentText("Lanczos4")
 
@@ -466,24 +524,30 @@ class ExportPanel(QWidget):
 
         self.btn_preview = QPushButton("보정 결과 생성 / 미리보기")
         self.btn_preview.setMinimumHeight(30)
+        self.btn_preview.setToolTip(
+            "보정된 정사영상을 만들어 [보정 결과] 탭에 보여 줍니다.\n"
+            "그 위에서 직접 거리를 재 보며 검산할 수 있습니다.")
         self.btn_preview.clicked.connect(
             lambda: self.previewRequested.emit(self.gsd_m(), self.interp())
         )
         self.btn_save = QPushButton("보정 이미지 저장 (+ 월드파일)")
+        self.btn_save.setToolTip(
+            "이미지와 함께 월드파일(.pgw)을 저장합니다.\n"
+            "둘을 같은 폴더에 두면 QGIS·CAD 가 실제 축척으로 읽습니다.")
         self.btn_save.clicked.connect(
             lambda: self.saveRasterRequested.emit(self.gsd_m(), self.interp())
         )
 
         exp = QGroupBox("내보내기")
         ev = QVBoxLayout(exp)
-        for key, title, tip in (
-            ("dxf", "DXF 도면 (미터 단위)", "점·실측선·도면 요소를 CAD 로 내보냅니다."),
-            ("csv", "관측 성과표 (CSV)", "관측별 잔차와 진단값 표."),
-            ("report", "검사 리포트 (TXT)", "정확도 요약과 경고를 담은 보고서."),
-            ("camera", "카메라 파라미터 (JSON)", "추정된 왜곡계수. OpenCV 규약 변환 포함."),
+        for key, title in (
+            ("dxf", "DXF 도면 (미터 단위)"),
+            ("csv", "관측 성과표 (CSV)"),
+            ("report", "검사 리포트 (TXT)"),
+            ("camera", "카메라 파라미터 (JSON)"),
         ):
             b = QPushButton(title)
-            b.setToolTip(tip)
+            b.setToolTip(H.EXPORT_HELP[key])
             b.clicked.connect(lambda _=False, k=key: self.exportRequested.emit(k))
             ev.addWidget(b)
 
@@ -520,3 +584,46 @@ class ExportPanel(QWidget):
     def sizeHintChanged(self) -> None:
         self.gsdModeChanged.emit("manual" if self.cmb_mode.currentIndex() == 3
                                  else self.mode_key())
+
+
+# ------------------------------------------------------------------- 안내판
+class GuidePanel(QWidget):
+    """"지금 무엇을 하면 되는지"를 항상 보여 주는 패널.
+
+    기능이 많은 프로그램에서 처음 쓰는 사람이 막히는 지점은 대개
+    "다음에 뭘 눌러야 하는지 모르겠다"이다. 메뉴를 뒤지게 하는 대신,
+    현재 상태를 보고 다음 한 걸음만 강조해서 보여 준다.
+    """
+
+    actionRequested = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.browser = QTextBrowser(self)
+        self.browser.setOpenLinks(False)          # 링크는 우리가 처리한다
+        self.browser.anchorClicked.connect(self._on_anchor)
+        self.browser.setStyleSheet("QTextBrowser { border: none; }")
+
+        btn_manual = QPushButton("사용설명서 (F1)")
+        btn_manual.setToolTip(H.ACTION_TIPS["manual"])
+        btn_manual.clicked.connect(lambda: self.actionRequested.emit("manual"))
+        btn_terms = QPushButton("용어 사전")
+        btn_terms.setToolTip(H.ACTION_TIPS["glossary"])
+        btn_terms.clicked.connect(lambda: self.actionRequested.emit("glossary"))
+        row = QHBoxLayout()
+        row.addWidget(btn_manual)
+        row.addWidget(btn_terms)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(4, 4, 4, 4)
+        lay.addWidget(self.browser, 1)
+        lay.addLayout(row)
+        self.refresh(H.GuideState())
+
+    def refresh(self, state) -> None:
+        self.browser.setHtml(H.guide_html(state))
+
+    def _on_anchor(self, url) -> None:
+        text = url.toString()
+        if text.startswith("act:"):
+            self.actionRequested.emit(text[4:])

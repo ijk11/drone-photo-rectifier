@@ -20,10 +20,13 @@ from .constraints import Observation
 from .params import DEFAULT_FREE, ModelParams
 from .transform import PlaneModel
 
-__all__ = ["Point", "Feature", "Project", "FILE_SUFFIX", "FORMAT_VERSION"]
+__all__ = ["Point", "Feature", "Project", "FILE_SUFFIX", "FORMAT_VERSION", "FORMAT_ID"]
 
 FILE_SUFFIX = ".drproj"
 FORMAT_VERSION = 1
+FORMAT_ID = "drone-photo-rectifier"
+#: 저장소 이름을 바꾸기 전에 저장된 파일도 계속 열 수 있게 한다.
+_LEGACY_FORMAT_IDS = ("drone-rectify",)
 
 
 @dataclass
@@ -161,7 +164,7 @@ class Project:
             except ValueError:
                 pass  # 다른 드라이브면 절대경로 유지
         return {
-            "format": "drone-rectify",
+            "format": FORMAT_ID,
             "version": FORMAT_VERSION,
             "image": {"path": img, "width": self.image_width, "height": self.image_height},
             "points": [p.to_dict() for p in self.points],
@@ -211,8 +214,8 @@ class Project:
     def load(cls, path: str) -> "Project":
         p = Path(path)
         data = json.loads(p.read_text(encoding="utf-8"))
-        if data.get("format") != "drone-rectify":
-            raise ValueError("drone-rectify 프로젝트 파일이 아닙니다.")
+        if data.get("format") not in (FORMAT_ID, *_LEGACY_FORMAT_IDS):
+            raise ValueError("drone-photo-rectifier 프로젝트 파일이 아닙니다.")
         if int(data.get("version", 0)) > FORMAT_VERSION:
             raise ValueError(
                 f"이 파일은 더 새로운 버전(v{data.get('version')})입니다. "

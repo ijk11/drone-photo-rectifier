@@ -11,7 +11,7 @@ import math
 import numpy as np
 import pytest
 
-from dronerect.core.constraints import (
+from drone_photo_rectifier.core.constraints import (
     KIND_ANGLE,
     KIND_COLLINEAR,
     KIND_DISTANCE,
@@ -20,12 +20,12 @@ from dronerect.core.constraints import (
     Observation,
     observation_residual,
 )
-from dronerect.core.distortion import distort, max_undistort_error, undistort
-from dronerect.core.params import ModelParams, auto_free_params
-from dronerect.core.project import Project
-from dronerect.core.rectify import plan_grid, suggest_gsd, world_file_text
-from dronerect.core.solver import adjust, distance_with_uncertainty, initial_params
-from dronerect.core.transform import PlaneModel, solve_gauge
+from drone_photo_rectifier.core.distortion import distort, max_undistort_error, undistort
+from drone_photo_rectifier.core.params import ModelParams, auto_free_params
+from drone_photo_rectifier.core.project import Project
+from drone_photo_rectifier.core.rectify import plan_grid, suggest_gsd, world_file_text
+from drone_photo_rectifier.core.solver import adjust, distance_with_uncertainty, initial_params
+from drone_photo_rectifier.core.transform import PlaneModel, solve_gauge
 
 W, H = 4000, 3000
 TRUTH = ModelParams(l1=0.10, l2=-0.24, b=0.035, log_a=0.06,

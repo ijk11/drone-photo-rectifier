@@ -7,7 +7,7 @@
 
 사용::
 
-    python -m dronerect.tools.make_synthetic --out samples
+    python -m drone_photo_rectifier.tools.make_synthetic --out samples
 
 생성물
     ``synthetic.png``        합성된 "드론 사진"
@@ -176,7 +176,7 @@ def main(argv=None) -> int:
         image_path=str((out / "synthetic.png").resolve()),
         image_width=args.width,
         image_height=args.height,
-        notes="dronerect.tools.make_synthetic 로 생성한 검증용 합성 데이터입니다.\n"
+        notes="drone_photo_rectifier.tools.make_synthetic 로 생성한 검증용 합성 데이터입니다.\n"
               "참값은 synthetic_truth.json 에 있습니다.",
     )
     idx_of: dict[int, str] = {}

@@ -3,13 +3,13 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "dronerect"
+name = "drone-photo-rectifier"
 version = "0.1.0"
 description = "실측 기준선을 이용해 드론/항공 사진의 원근·렌즈 왜곡을 보정하는 2D 정사보정 도구"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "drone-rectify contributors" }]
+authors = [{ name = "drone-photo-rectifier contributors" }]
 keywords = ["photogrammetry", "rectification", "homography", "lens-distortion", "drone", "orthophoto"]
 dependencies = [
     "numpy>=1.24",
@@ -23,7 +23,7 @@ dependencies = [
 dev = ["pytest>=7.0"]
 
 [project.scripts]
-dronerect = "dronerect.__main__:main"
+drone-photo-rectifier = "drone_photo_rectifier.__main__:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

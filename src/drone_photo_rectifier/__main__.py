@@ -1,4 +1,4 @@
-"""진입점: ``python -m dronerect`` 또는 콘솔 스크립트 ``dronerect``."""
+"""진입점: ``python -m drone_photo_rectifier`` 또는 콘솔 스크립트 ``drone-photo-rectifier``."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ def main(argv: list[str] | None = None) -> int:
     from PySide6.QtWidgets import QApplication
 
     app = QApplication(argv)
-    app.setApplicationName("drone-rectify")
-    app.setOrganizationName("drone-rectify")
+    app.setApplicationName("drone-photo-rectifier")
+    app.setOrganizationName("drone-photo-rectifier")
     # 한글 라벨이 많으므로 한글 글꼴을 우선 지정한다(없으면 시스템 기본).
     for family in ("Malgun Gothic", "맑은 고딕", "Noto Sans KR", "Segoe UI"):
         f = QFont(family, 9)

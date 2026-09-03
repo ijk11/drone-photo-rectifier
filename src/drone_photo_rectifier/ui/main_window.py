@@ -47,7 +47,7 @@ from .panels import ExportPanel, ObservationTable, PointTable, SolvePanel
 from .result_view import ResultView
 
 IMAGE_FILTER = "이미지 (*.jpg *.jpeg *.png *.tif *.tiff *.bmp);;모든 파일 (*.*)"
-PROJECT_FILTER = f"drone-rectify 프로젝트 (*{FILE_SUFFIX});;모든 파일 (*.*)"
+PROJECT_FILTER = f"drone-photo-rectifier 프로젝트 (*{FILE_SUFFIX});;모든 파일 (*.*)"
 
 HELP_HTML = """
 <h2>사용법</h2>
@@ -100,7 +100,7 @@ HELP_HTML = """
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("drone-rectify — 실측 기준 정사보정")
+        self.setWindowTitle("drone-photo-rectifier — 실측 기준 정사보정")
         self.resize(1500, 950)
 
         self.project = Project()
@@ -306,7 +306,7 @@ class MainWindow(QMainWindow):
         name = Path(self.project.path).name if self.project.path else "(저장 안 됨)"
         img = Path(self.project.image_path).name if self.project.image_path else "사진 없음"
         star = "*" if self._dirty else ""
-        self.setWindowTitle(f"drone-rectify — {name}{star}  [{img}]")
+        self.setWindowTitle(f"drone-photo-rectifier — {name}{star}  [{img}]")
 
     # ------------------------------------------------------------------ 모드
     def _set_mode(self, mode: str) -> None:
@@ -868,8 +868,8 @@ class MainWindow(QMainWindow):
     def _show_about(self) -> None:
         from .. import __version__
         QMessageBox.about(
-            self, "drone-rectify",
-            f"<b>drone-rectify</b> v{__version__}<br><br>"
+            self, "drone-photo-rectifier",
+            f"<b>drone-photo-rectifier</b> v{__version__}<br><br>"
             "실측 기준선으로 드론/항공 사진의 원근과 렌즈 왜곡을 동시에 보정해<br>"
             "축척이 일정한 2D 도면 바탕을 만드는 도구입니다.<br><br>"
             "MIT License"

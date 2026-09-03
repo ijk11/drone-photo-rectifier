@@ -304,7 +304,7 @@ def export_camera_json(
         p = p.with_suffix(".json")
     model = project.model()
     data = {
-        "convention": "drone-rectify (대각선 절반 s0 로 정규화)",
+        "convention": "drone-photo-rectifier (대각선 절반 s0 로 정규화)",
         "image_size": [project.image_width, project.image_height],
         "s0_px": model.s0,
         "principal_point_px": list(model.center),

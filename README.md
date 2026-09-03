@@ -1,4 +1,4 @@
-# drone-rectify
+# drone-photo-rectifier
 
 실측 기준선으로 드론·항공 사진의 **원근과 렌즈 왜곡을 동시에 보정**해, 축척이
 일정한 2D 도면 바탕을 만드는 데스크톱 도구입니다.
@@ -50,7 +50,7 @@ Python 3.10 이상이 필요합니다.
 pip install -r requirements.txt
 ```
 
-개발 모드로 설치하면 `dronerect` 명령이 생깁니다.
+개발 모드로 설치하면 `drone-photo-rectifier` 명령이 생깁니다.
 
 ```bash
 pip install -e .
@@ -59,13 +59,13 @@ pip install -e .
 ## 실행
 
 ```bash
-python -m dronerect
+python -m drone_photo_rectifier
 ```
 
 사진이나 프로젝트 파일을 인자로 주면 바로 엽니다.
 
 ```bash
-python -m dronerect samples/synthetic.drproj
+python -m drone_photo_rectifier samples/synthetic.drproj
 ```
 
 ### 바로 시험해 보기
@@ -74,7 +74,7 @@ python -m dronerect samples/synthetic.drproj
 수 있습니다.
 
 ```bash
-python -m dronerect.tools.make_synthetic --out samples
+python -m drone_photo_rectifier.tools.make_synthetic --out samples
 ```
 
 생성물:
@@ -187,7 +187,7 @@ H = T(tx,ty) · R(θ) · A(s, a, b) · P(l1, l2)
 ## 구조
 
 ```
-src/dronerect/
+src/drone_photo_rectifier/
   core/
     distortion.py   Brown-Conrady 왜곡 모델과 반복 역함수
     params.py       파라미터 정의, 벡터 패킹, 자동 자유도 선택

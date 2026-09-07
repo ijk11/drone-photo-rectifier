@@ -450,7 +450,9 @@ class SolvePanel(QWidget):
         for n in result.free_names:
             v = getattr(result.params, n)
             sd = result.param_std.get(n, float("nan"))
-            lines.append(f"  {n:7s} {v:+12.6f}   ± {sd:.6f}")
+            # 경계에 붙어 결정되지 않은 값에 표준편차를 붙이면 오해를 부른다.
+            tail = f"± {sd:.6f}" if math.isfinite(sd) else "결정 안 됨 (한계에 붙음)"
+            lines.append(f"  {n:7s} {v:+12.6f}   {tail}")
         if result.warnings:
             lines.append("")
             lines.append("[경고]")

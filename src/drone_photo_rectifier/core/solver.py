@@ -39,6 +39,7 @@ from .constraints import (
     observation_residual,
     predicted_value,
 )
+from .distortion import radial_slope_min
 from .params import PARAM_BOUNDS, ModelParams, auto_free_params, bounds_for
 from .transform import PlaneModel
 
@@ -78,6 +79,22 @@ def _termination_ko(message: str) -> str:
 
 #: 원근 분모 w 의 하한. 이보다 작아지면 소실선에 접근한 것으로 보고 벌점.
 _W_MIN = 0.05
+#: 방사 왜곡 사상 g(r) 의 기울기 하한. 0 이하면 이미지가 접혀 역함수가
+#: 존재하지 않으므로, 최적화가 그 영역에 들어가지 못하게 장벽을 세운다.
+_SLOPE_MIN = 0.05
+
+#: 경계에 "붙었다"고 볼 여유. 최적화기는 경계에 정확히 착지하지 않고
+#: 아주 조금 안쪽에서 멈추므로 범위 폭에 비례한 허용오차로 판정한다.
+_BOUND_TOL_FRAC = 1e-3
+
+
+def _is_at_bound(name: str, value: float) -> bool:
+    """파라미터가 물리적 한계에 밀려 붙었는가."""
+    lo, hi = PARAM_BOUNDS.get(name, (-math.inf, math.inf))
+    if not math.isfinite(value) or not math.isfinite(lo) or not math.isfinite(hi):
+        return False
+    tol = _BOUND_TOL_FRAC * max(hi - lo, 1e-12)
+    return value <= lo + tol or value >= hi - tol
 _BARRIER_WEIGHT = 1.0e3
 
 #: 각도 계열 관측(잔차가 라디안 단위).
@@ -205,6 +222,12 @@ def initial_params(
 
 
 # ------------------------------------------------------------------ 조정계산
+#: 관측이 모자랄 때 뒤에서부터 하나씩 빼 보는 "덤" 파라미터.
+#: 원근/축척(l1, l2, b, log_a, log_s)은 이 모델의 뼈대라 뺄 수 없고,
+#: 렌즈 왜곡은 관측이 넉넉할 때만 의미가 있으므로 이쪽부터 포기한다.
+_OPTIONAL_ORDER: tuple[str, ...] = ("k3", "p2", "p1", "k2", "k1")
+
+
 def adjust(
     points: dict[str, np.ndarray],
     observations: list[Observation],
@@ -215,7 +238,59 @@ def adjust(
     robust: bool = False,
     max_nfev: int = 20000,
 ) -> AdjustmentResult:
-    """가중 최소제곱으로 보정 파라미터를 추정한다.
+    """보정 파라미터를 추정한다.
+
+    파라미터를 자동 선택한 경우, 해가 물리적 한계까지 밀려나면(그 해는
+    무의미하다) 렌즈 왜곡부터 하나씩 빼면서 다시 풀어 본다. 관측이 모자란데
+    많은 것을 풀려다 실패하는 것보다, 풀 수 있는 것만 푸는 편이 낫다.
+    """
+    auto = free_names is None
+    result = _adjust_once(points, observations, width, height,
+                          free_names, init, robust, max_nfev)
+    if not auto or not result.ok or not params_at_bound(result):
+        return result
+
+    trimmed = list(result.free_names)
+    dropped: list[str] = []
+    for name in _OPTIONAL_ORDER:
+        if name not in trimmed:
+            continue
+        trimmed.remove(name)
+        dropped.append(name)
+        alt = _adjust_once(points, observations, width, height,
+                           list(trimmed), init, robust, max_nfev)
+        if alt.ok and not params_at_bound(alt):
+            alt.warnings.insert(
+                0,
+                f"관측이 부족해 {', '.join(dropped)} 까지는 결정할 수 없었습니다. "
+                f"그 값을 빼고 다시 계산한 결과입니다(푼 미지수: "
+                f"{', '.join(alt.free_names)}). 렌즈 왜곡까지 잡으려면 실측을 "
+                "더 추가하세요."
+            )
+            return alt
+
+    # 다 빼 봐도 한계에 붙으면 원래 결과를 그대로 돌려준다.
+    # 이 경우 문제는 파라미터 개수가 아니라 관측 자체에 있다.
+    result.warnings.insert(
+        0,
+        "렌즈 왜곡을 모두 빼고 다시 풀어 봐도 해가 물리적 한계에 붙습니다. "
+        "파라미터 개수가 아니라 실측값이나 점 위치에 문제가 있을 가능성이 "
+        "높습니다."
+    )
+    return result
+
+
+def _adjust_once(
+    points: dict[str, np.ndarray],
+    observations: list[Observation],
+    width: int,
+    height: int,
+    free_names: list[str] | None = None,
+    init: ModelParams | None = None,
+    robust: bool = False,
+    max_nfev: int = 20000,
+) -> AdjustmentResult:
+    """가중 최소제곱으로 보정 파라미터를 추정한다(1회).
 
     Parameters
     ----------
@@ -290,7 +365,11 @@ def adjust(
         _, w = model.forward(pix)
         # 소실선 접근 방지 장벽. 정상 해에서는 정확히 0이므로 통계에 영향이 없다.
         barrier = _BARRIER_WEIGHT * np.minimum(0.0, np.nan_to_num(w, nan=-1.0) - _W_MIN)
-        return np.concatenate([obs_residuals(x), barrier])
+        # 왜곡 모델이 접히지 않게 하는 장벽. 접히면 undistort 가 다른 가지로
+        # 수렴해 잔차는 그럴듯한데 기하는 완전히 틀린 해가 나온다.
+        slope = radial_slope_min(pr.k1, pr.k2, pr.k3)
+        fold = np.array([_BARRIER_WEIGHT * min(0.0, slope - _SLOPE_MIN)])
+        return np.concatenate([obs_residuals(x), barrier, fold])
 
     try:
         res = least_squares(
@@ -354,6 +433,12 @@ def adjust(
     scale = sigma0 if (dof > 0 and math.isfinite(sigma0) and sigma0 > 0) else 1.0
     cov = qxx * (scale ** 2)
     param_std = {n: float(math.sqrt(max(cov[i, i], 0.0))) for i, n in enumerate(free_names)}
+    # 경계에서 멈춘 파라미터는 관측이 결정해 준 값이 아니다. 통상 공분산은
+    # 제약이 없다고 보고 계산하므로 그 값에 표준편차를 붙이면 "이 정도
+    # 정밀도로 구했다"는 뜻으로 오해된다. 결정되지 않았음을 그대로 알린다.
+    for name in free_names:
+        if _is_at_bound(name, getattr(params, name)):
+            param_std[name] = float("inf")
 
     stats: list[ObsStat] = []
     len_res: list[float] = []
@@ -365,7 +450,12 @@ def adjust(
         angular = obs.kind in _ANGULAR
         disp_res = math.degrees(nat) if angular else nat
         red = float(redundancy[i])
-        wt = float(r[i] / (scale * math.sqrt(red))) if red > 1e-6 else float("nan")
+        # Baarda 데이터 스누핑은 **사전분산**(사용자가 준 sigma, 즉 단위분산 1)
+        # 을 기준으로 해야 한다. 추정된 sigma0 로 나누면, 조대오차가 클수록
+        # sigma0 도 함께 커져 분모가 부풀고 정작 그 오차가 가려진다(masking).
+        # 실제로 0.5 m 짜리 오차를 4개 넣었을 때 예전 방식은 하나도 잡아내지
+        # 못했고, 사전분산 기준으로는 4개 모두 잡아냈다.
+        wt = float(r[i] / math.sqrt(red)) if red > 1e-6 else float("nan")
         press_std = float(r[i] / red) if red > 1e-6 else float("nan")
         press_nat = press_std * sig
         press_disp = math.degrees(press_nat) if angular else press_nat
@@ -515,16 +605,8 @@ def params_at_bound(result: "AdjustmentResult") -> list[str]:
     끝까지 밀어붙였다는 뜻이다. 경계 덕분에 파국은 막았지만 그 해를
     그대로 쓰면 안 된다는 신호다.
     """
-    hit = []
-    for name in result.free_names:
-        lo, hi = PARAM_BOUNDS.get(name, (-math.inf, math.inf))
-        v = getattr(result.params, name, None)
-        if v is None or not math.isfinite(v):
-            continue
-        tol = 1e-3 * max(hi - lo, 1e-9)
-        if v <= lo + tol or v >= hi - tol:
-            hit.append(name)
-    return hit
+    return [n for n in result.free_names
+            if _is_at_bound(n, getattr(result.params, n, float("nan")))]
 
 
 def verdict(result: "AdjustmentResult | None") -> Verdict:
@@ -585,12 +667,27 @@ def verdict(result: "AdjustmentResult | None") -> Verdict:
              "확인하세요.",
              "이 결과로는 정사영상을 만들지 마세요."])
 
-    if n_out:
+    n_enabled = sum(1 for s in result.obs_stats if s.enabled)
+    widespread = (n_out >= max(2, (n_enabled + 1) // 2)
+                  and math.isfinite(result.sigma0) and result.sigma0 > 3.0)
+
+    if widespread:
+        # 대부분이 걸리면 개별 조대오차라기보다 sigma 설정이나 전제가 문제다.
+        level = "warn"
+        head = (f"관측 {n_enabled}개 중 {n_out}개가 입력한 오차범위를 "
+                "지키지 못합니다.")
+        advice.append("몇 개가 틀렸다기보다 σ 를 너무 작게 잡았을 가능성이 "
+                      "큽니다. 짧은 구간일수록 점 찍는 오차가 크게 먹히니 "
+                      "σ 를 현실적으로 올리세요.")
+        advice.append("대상이 하나의 평면이 아닐 수도 있습니다. 높이가 있는 곳"
+                      "(적치물 위, 턱, 경사면)에서 잰 구간이 있으면 빼세요.")
+        advice.append("그래도 남으면 잔차가 가장 큰 것부터 점 위치를 확인하세요.")
+    elif n_out:
         level = "warn"
         head = f"조대오차가 의심되는 관측이 {n_out}건 있습니다."
         advice.append("[관측] 탭에서 빨간 줄을 확인하세요. 실측값 오타이거나 "
                       "점을 잘못 찍었을 가능성이 큽니다.")
-        advice.append("확인이 어려우면 [조대오차 의심 관측 끄고 재계산]을 누르세요.")
+        advice.append("확인이 어려우면 [의심 관측 끄고 다시 계산]을 누르세요.")
     elif math.isfinite(result.sigma0) and result.sigma0 > 3.0:
         level = "warn"
         head = "실측값과 모델이 입력한 오차범위보다 많이 어긋납니다."

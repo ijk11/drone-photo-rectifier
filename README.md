@@ -54,28 +54,55 @@
 
 ## 설치
 
-Python 3.10 이상이 필요합니다.
+Python 3.10 이상이 필요합니다. 없으면 [python.org](https://www.python.org) 에서
+설치하세요(설치 화면에서 **Add Python to PATH** 를 반드시 체크).
+
+필요한 패키지는 한 번만 설치하면 됩니다.
 
 ```bash
 pip install -r requirements.txt
 ```
 
-개발 모드로 설치하면 `drone-photo-rectifier` 명령이 생깁니다.
+## 실행
+
+### 1. 가장 쉬운 방법 — Windows
+
+저장소 폴더의 **`실행.bat` 을 더블클릭**하세요. 설치할 것도, 명령을 칠 것도
+없습니다. 패키지가 빠져 있으면 무엇을 설치해야 하는지 알려 줍니다.
+
+> 자주 쓰신다면 `실행.bat` 에서 마우스 오른쪽 ▸ **바로 가기 만들기** 로
+> 바탕화면에 두면 편합니다.
+
+### 2. 터미널에서
+
+`src` 레이아웃이라 저장소 폴더에서 `python -m ...` 을 바로 쓰려면 경로를
+알려 줘야 합니다.
+
+```bash
+# Windows PowerShell
+$env:PYTHONPATH = "src"; python -m drone_photo_rectifier
+```
+
+```bash
+# macOS / Linux
+PYTHONPATH=src python -m drone_photo_rectifier
+```
+
+### 3. 설치해서 어디서나 실행
+
+개발 모드로 설치하면 `drone-photo-rectifier` 명령이 생겨 어느 폴더에서든
+실행할 수 있습니다.
 
 ```bash
 pip install -e .
+drone-photo-rectifier
 ```
 
-## 실행
+사진이나 프로젝트 파일을 인자로 주면 바로 엽니다. `실행.bat` 위에 파일을
+끌어다 놓아도 됩니다.
 
 ```bash
-python -m drone_photo_rectifier
-```
-
-사진이나 프로젝트 파일을 인자로 주면 바로 엽니다.
-
-```bash
-python -m drone_photo_rectifier samples/synthetic.drproj
+drone-photo-rectifier samples/synthetic.drproj
 ```
 
 ### 바로 시험해 보기
@@ -85,6 +112,7 @@ python -m drone_photo_rectifier samples/synthetic.drproj
 
 ```bash
 python -m drone_photo_rectifier.tools.make_synthetic --out samples
+# 설치하지 않았다면 PYTHONPATH=src 를 앞에 붙이세요
 ```
 
 생성물:

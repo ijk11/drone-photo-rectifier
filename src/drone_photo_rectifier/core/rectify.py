@@ -40,6 +40,19 @@ INTERPOLATIONS: dict[str, int] = {
 #: 출력 픽셀 수 상한(메모리 보호). 초과 시 사용자에게 GSD 조정을 요구한다.
 MAX_OUTPUT_PIXELS = 200_000_000
 
+#: 한 변의 픽셀 수 상한.
+#:
+#: cv2.remap 은 내부적으로 좌표를 16비트로 다루기 때문에 가로/세로가 각각
+#: SHRT_MAX(32767) 미만이어야 한다. 총 픽셀 수만 검사하면 "10만 x 1500"
+#: 같은 가늘고 긴 출력이 상한을 통과한 뒤 remap 에서 assertion 으로 죽는다.
+#: 그런 출력은 어차피 쓸 수 없으므로 격자를 계획하는 단계에서 막는다.
+MAX_OUTPUT_SIDE = 32_000
+
+#: 이 비율을 넘는 가로세로 비는 보정이 잘못 풀린 것으로 본다.
+#: 원본이 4:3 인 사진을 정사보정해 봐야 10:1 을 넘기 어렵다. 반면 해가
+#: 퇴화하면 수천 대 1 이 나온다.
+DEGENERATE_ASPECT = 50.0
+
 
 @dataclass
 class OutputGrid:
@@ -133,11 +146,27 @@ def plan_grid(
     h = int(math.ceil((ymax - ymin) / gsd))
     if w < 1 or h < 1:
         raise ValueError("출력 크기가 0입니다. GSD 또는 범위를 확인하세요.")
+    # 크기가 크다는 것은 증상이고, 원인은 대개 보정이 잘못 풀린 것이다.
+    # 원인을 먼저 말해 주지 않으면 사용자는 GSD 만 계속 키우게 된다.
+    aspect = max(w, h) / max(min(w, h), 1)
+    if aspect > DEGENERATE_ASPECT:
+        raise ValueError(
+            f"보정 결과가 한 방향으로 찌부러졌습니다 "
+            f"(가로세로 비 {aspect:.0f} : 1).\n"
+            "실측 배치가 부족해 보정이 잘못 풀린 상태입니다. GSD 를 바꿔도 "
+            "해결되지 않습니다. [보정] 탭의 판정과 경고를 먼저 확인하세요."
+        )
     if w * h > MAX_OUTPUT_PIXELS:
         raise ValueError(
-            f"출력이 너무 큽니다 ({w} x {h} = {w*h/1e6:.0f} MP). "
-            f"GSD 를 {gsd * math.sqrt(w * h / MAX_OUTPUT_PIXELS) * 1000:.1f} mm/px "
+            f"출력이 너무 큽니다 ({w} x {h} = {w*h/1e6:.0f} MP).\n"
+            f"GSD 를 {gsd * math.sqrt(w * h / MAX_OUTPUT_PIXELS) * 1000:.3g} mm/px "
             "이상으로 키우거나 출력 범위를 좁히세요."
+        )
+    if w > MAX_OUTPUT_SIDE or h > MAX_OUTPUT_SIDE:
+        need = gsd * max(w, h) / MAX_OUTPUT_SIDE
+        raise ValueError(
+            f"출력 한 변이 너무 깁니다 ({w} x {h} px, 한계 {MAX_OUTPUT_SIDE}).\n"
+            f"GSD 를 {need * 1000:.3g} mm/px 이상으로 키우세요."
         )
     return OutputGrid(xmin=xmin, ymin=ymin, gsd=gsd, width=w, height=h)
 
@@ -190,10 +219,17 @@ def rectify_image(
         mx = np.where(valid, mx, -1.0).astype(np.float32)
         my = np.where(valid, my, -1.0).astype(np.float32)
 
-        band = cv2.remap(
-            image, mx, my, interpolation,
-            borderMode=cv2.BORDER_CONSTANT, borderValue=background,
-        )
+        try:
+            band = cv2.remap(
+                image, mx, my, interpolation,
+                borderMode=cv2.BORDER_CONSTANT, borderValue=background,
+            )
+        except cv2.error as exc:  # pragma: no cover - 상한 검사를 통과한 예외 상황
+            raise ValueError(
+                f"래스터를 만들지 못했습니다 ({w_out} x {h_out} px).\n"
+                "GSD 를 키우거나, 보정이 제대로 풀렸는지 [보정] 탭에서 "
+                "확인하세요."
+            ) from exc
         out[y0:y1] = band
         mask[y0:y1] = (valid * 255).astype(np.uint8)
         if progress is not None:

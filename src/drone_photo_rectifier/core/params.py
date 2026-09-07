@@ -42,6 +42,8 @@ __all__ = [
     "PARAM_LABELS",
     "DEFAULT_FREE",
     "GAUGE_PARAMS",
+    "PARAM_BOUNDS",
+    "bounds_for",
     "ModelParams",
     "auto_free_params",
 ]
@@ -80,6 +82,48 @@ DEFAULT_FREE: tuple[str, ...] = ("l1", "l2", "b", "log_a", "log_s", "k1", "k2")
 
 #: 거리 관측만으로는 결정되지 않는 gauge 파라미터.
 GAUGE_PARAMS: frozenset[str] = frozenset({"theta", "tx", "ty"})
+
+#: 파라미터가 물리적으로 가질 수 있는 범위.
+#:
+#: 관측이 부족하거나 방향이 치우치면 최소제곱해가 유일하지 않다. 그때
+#: 최적화기는 잔차만 줄이면 되므로 ``a = exp(log_a)`` 를 0 으로 보내
+#: **지상 평면을 선으로 찌부러뜨리는** 해를 찾아내기도 한다. 잔차는 작지만
+#: 물리적으로 무의미하고, 그 모델로 정사영상을 만들면 폭이 수십만 픽셀인
+#: 래스터가 나와 cv2.remap 이 죽는다(실제로 겪은 고장이다).
+#:
+#: 그래서 "실제 카메라라면 이 범위를 벗어날 수 없다"는 선을 걸어 둔다.
+#: 넉넉하게 잡아 정상적인 촬영은 건드리지 않으면서 파국적인 해만 막는다.
+PARAM_BOUNDS: dict[str, tuple[float, float]] = {
+    # 소실선. |l| > 1 이면 소실선이 사진 안을 지날 만큼 비스듬한 촬영이다.
+    # 그보다 훨씬 넉넉하게 둔다.
+    "l1": (-5.0, 5.0),
+    "l2": (-5.0, 5.0),
+    # 원근을 제거하고 남는 아핀은 실제 카메라라면 닮음에 가깝다. gauge 로
+    # 회전을 고정했으므로 전단 b 는 0, 종횡비 a 는 1 근처여야 한다.
+    "b": (-2.0, 2.0),
+    "log_a": (-1.5, 1.5),        # a = 0.22 ~ 4.5 배
+    "log_s": (-20.0, 20.0),      # 축척은 현장 크기에 따라 크게 달라진다
+    # 렌즈 왜곡(대각선 절반으로 정규화한 규약). 어안이라도 이 범위를 넘지 않는다.
+    "k1": (-2.0, 2.0),
+    "k2": (-2.0, 2.0),
+    "k3": (-2.0, 2.0),
+    "p1": (-0.5, 0.5),
+    "p2": (-0.5, 0.5),
+    # 주점은 사진 중심 근처다. 정규화 단위로 0.5 면 이미 모서리 쪽이다.
+    "cx_off": (-0.5, 0.5),
+    "cy_off": (-0.5, 0.5),
+    # gauge
+    "theta": (-math.pi, math.pi),
+    "tx": (-1.0e6, 1.0e6),
+    "ty": (-1.0e6, 1.0e6),
+}
+
+
+def bounds_for(names: Sequence[str]) -> tuple[np.ndarray, np.ndarray]:
+    """자유 파라미터 벡터에 대응하는 (하한, 상한) 배열."""
+    lo = np.array([PARAM_BOUNDS[n][0] for n in names], dtype=np.float64)
+    hi = np.array([PARAM_BOUNDS[n][1] for n in names], dtype=np.float64)
+    return lo, hi
 
 
 @dataclass

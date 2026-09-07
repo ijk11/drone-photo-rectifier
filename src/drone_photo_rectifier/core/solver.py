@@ -39,7 +39,7 @@ from .constraints import (
     observation_residual,
     predicted_value,
 )
-from .params import ModelParams, auto_free_params
+from .params import PARAM_BOUNDS, ModelParams, auto_free_params, bounds_for
 from .transform import PlaneModel
 
 __all__ = [
@@ -265,6 +265,14 @@ def adjust(
     base = (init or initial_params(points, active, width, height)).copy()
     x0 = base.to_vector(free_names)
 
+    # 물리적으로 불가능한 해(예: 지상 평면이 선으로 찌부러지는 a -> 0)를
+    # 최적화기가 골라 버리는 일이 있어 파라미터마다 범위를 건다.
+    lo, hi = bounds_for(free_names)
+    # trf 는 시작점이 경계 안에 있어야 한다. 경계에 딱 붙으면 그 방향으로
+    # 못 움직이므로 아주 조금 안쪽으로 넣는다.
+    span = hi - lo
+    x0 = np.clip(x0, lo + 1e-6 * span, hi - 1e-6 * span)
+
     def obs_residuals(x: np.ndarray) -> np.ndarray:
         pr = base.with_vector(free_names, x)
         model = PlaneModel(pr, width, height)
@@ -290,6 +298,7 @@ def adjust(
             x0,
             jac="3-point",
             method="trf",
+            bounds=(lo, hi),
             x_scale="jac",
             loss="soft_l1" if robust else "linear",
             f_scale=3.0,
@@ -499,6 +508,25 @@ class Verdict:
         return {"good": "\u2714", "warn": "\u26a0", "bad": "\u2716"}[self.level]
 
 
+def params_at_bound(result: "AdjustmentResult") -> list[str]:
+    """물리적 한계에 딱 붙어서 멈춘 파라미터 이름들.
+
+    경계에 붙었다는 것은 관측이 그 파라미터를 결정하지 못해 최적화기가
+    끝까지 밀어붙였다는 뜻이다. 경계 덕분에 파국은 막았지만 그 해를
+    그대로 쓰면 안 된다는 신호다.
+    """
+    hit = []
+    for name in result.free_names:
+        lo, hi = PARAM_BOUNDS.get(name, (-math.inf, math.inf))
+        v = getattr(result.params, name, None)
+        if v is None or not math.isfinite(v):
+            continue
+        tol = 1e-3 * max(hi - lo, 1e-9)
+        if v <= lo + tol or v >= hi - tol:
+            hit.append(name)
+    return hit
+
+
 def verdict(result: "AdjustmentResult | None") -> Verdict:
     """조정 결과를 사용자가 바로 이해할 수 있는 판정으로 바꾼다."""
     if result is None:
@@ -529,6 +557,33 @@ def verdict(result: "AdjustmentResult | None") -> Verdict:
 
     n_out = sum(1 for s in result.obs_stats if s.outlier)
     blind = sum(1 for s in result.obs_stats if s.enabled and s.redundancy < 0.05)
+    at_bound = params_at_bound(result)
+
+    # 아래 판정은 순서가 곧 우선순위다. 해가 아예 결정되지 않았다면
+    # 잔차나 조대오차를 따지는 것은 의미가 없으므로 그것부터 말한다.
+    if result.rank and result.rank < result.n_params:
+        return Verdict(
+            "bad",
+            f"실측 배치가 부족해 해가 결정되지 않았습니다 "
+            f"(결정된 미지수 {result.rank}/{result.n_params}).",
+            float("nan"),
+            ["실측 선분의 방향이 한쪽으로 몰려 있습니다. "
+             "가로만 재지 말고 세로·대각 방향을 섞으세요.",
+             "사진의 반대쪽 구석에도 실측을 추가하세요.",
+             "직각·평행 구속을 넣으면 줄자 없이도 부족한 정보를 채울 수 있습니다.",
+             "이 상태의 결과로 정사영상을 만들면 형태가 크게 일그러집니다."])
+
+    if at_bound:
+        labels = ", ".join(at_bound)
+        return Verdict(
+            "bad",
+            f"보정값이 물리적 한계까지 밀려났습니다 ({labels}).",
+            float("nan"),
+            ["관측이 그 값을 결정하지 못해 최적화가 끝까지 밀어붙인 상태입니다.",
+             "실측 선분을 사진 전체에 고르게, 방향을 섞어 추가하세요.",
+             "점을 엉뚱한 곳에 찍었거나 실측값 단위(미터)가 틀리지 않았는지 "
+             "확인하세요.",
+             "이 결과로는 정사영상을 만들지 마세요."])
 
     if n_out:
         level = "warn"

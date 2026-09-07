@@ -652,7 +652,8 @@ class MainWindow(QMainWindow):
         try:
             grid = plan_grid(model, gsd)
         except Exception as exc:
-            self._warn(str(exc))
+            # 보정 자체는 끝났고 래스터를 만들지 못한 것이므로 제목을 구분한다.
+            self._error("정사영상을 만들 수 없습니다", str(exc))
             return False
 
         dlg = QProgressDialog("정사보정 래스터 생성 중...", "취소", 0, 100, self)
@@ -675,7 +676,7 @@ class MainWindow(QMainWindow):
             return False
         except Exception as exc:
             dlg.close()
-            self._error("보정 실패", str(exc))
+            self._error("정사영상 생성 실패", str(exc))
             return False
         dlg.setValue(100)
 

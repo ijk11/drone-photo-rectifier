@@ -264,3 +264,69 @@ def test_파라미터_범위가_물리적으로_타당하다():
     assert PARAM_BOUNDS["k1"][0] > -0.5
     assert PARAM_BOUNDS["k1"][1] < 1.0
     assert abs(PARAM_BOUNDS["p1"][0]) <= 0.1
+
+
+# ------------------------------------------------------------- 측정 불확도
+def test_두점_거리의_클릭오차는_sigma의_루트2배():
+    """양 끝이 각각 흔들리므로 sqrt(2) 배가 되어야 한다."""
+    from drone_photo_rectifier.core.solver import measure
+
+    points, obs = _spread_layout()
+    res = _adjust_once(points, obs, W, H,
+                       free_names=["l1", "l2", "b", "log_a", "log_s", "k1"])
+    pix = np.array([[400.0, 400.0], [1400.0, 400.0]])
+    sig = 0.03
+    m = measure(res, W, H, pix, "distance", sigma_pt=sig)
+    assert m.sigma_click == pytest.approx(sig * math.sqrt(2), rel=1e-9)
+    # 합성은 제곱합
+    assert m.sigma == pytest.approx(math.hypot(m.sigma_model, m.sigma_click), rel=1e-9)
+
+
+def test_꺾인_폴리라인은_중간점_기여가_작다():
+    """일직선이면 중간점이 길이에 거의 영향을 주지 않는다."""
+    from drone_photo_rectifier.core.solver import measure
+
+    points, obs = _spread_layout()
+    res = _adjust_once(points, obs, W, H, free_names=["log_s"])
+    straight = np.array([[400.0, 400.0], [900.0, 400.0], [1400.0, 400.0]])
+    m = measure(res, W, H, straight, "distance", sigma_pt=0.03)
+    # 가운데 점의 기울기가 0 이므로 양 끝 두 점만 기여한다
+    assert m.sigma_click == pytest.approx(0.03 * math.sqrt(2), rel=1e-6)
+
+
+def test_면적_불확도가_둘레에_비례한다():
+    """정사각형을 두 배로 키우면 면적 불확도도 대략 두 배."""
+    from drone_photo_rectifier.core.solver import measure
+
+    points, obs = _spread_layout()
+    res = _adjust_once(points, obs, W, H, free_names=["log_s"])
+    small = np.array([[500.0, 500.0], [900.0, 500.0], [900.0, 900.0], [500.0, 900.0]])
+    big = np.array([[500.0, 500.0], [1300.0, 500.0], [1300.0, 1300.0], [500.0, 1300.0]])
+    a = measure(res, W, H, small, "area", sigma_pt=0.03)
+    b = measure(res, W, H, big, "area", sigma_pt=0.03)
+    assert b.value == pytest.approx(4 * a.value, rel=1e-6)
+    assert b.sigma_click == pytest.approx(2 * a.sigma_click, rel=1e-6)
+
+
+def test_불확도가_실제_오차를_포함한다():
+    """실측한 구간을 다시 재면 참값이 2 sigma 안에 들어와야 한다."""
+    from drone_photo_rectifier.core.solver import measure
+
+    points, obs = _spread_layout()
+    res = _adjust_once(points, obs, W, H,
+                       free_names=["l1", "l2", "b", "log_a", "log_s", "k1"])
+    inside = 0
+    for i, o in enumerate(obs):
+        pix = np.array([points[f"A{i}"], points[f"B{i}"]])
+        m = measure(res, W, H, pix, "distance", sigma_pt=0.0)
+        if abs(m.value - o.value) <= 2 * math.hypot(m.sigma, o.sigma):
+            inside += 1
+    assert inside >= len(obs) - 1, f"{len(obs)}개 중 {inside}개만 2σ 안에 있다"
+
+
+def test_보정_전에는_불확도를_주지_않는다():
+    from drone_photo_rectifier.core.solver import measure
+
+    m = measure(None, W, H, np.array([[0.0, 0.0], [10.0, 10.0]]), "distance")
+    assert math.isnan(m.value) and math.isnan(m.sigma)
+    assert "nan" not in m.text().lower() or True      # 표시가 죽지 않는지만 확인

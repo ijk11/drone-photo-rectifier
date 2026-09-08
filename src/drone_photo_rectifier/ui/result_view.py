@@ -15,6 +15,9 @@ from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QBrush, QColor, QFont, QImage, QPainter, QPen, QPixmap, QPolygonF
 from PySide6.QtWidgets import QGraphicsScene, QGraphicsView
 
+from ..core.solver import measure
+from ..core.transform import PlaneModel
+
 __all__ = ["ResultView"]
 
 _C_LINE = QColor(0, 230, 255)
@@ -40,6 +43,10 @@ class ResultView(QGraphicsView):
         self._image: QImage | None = None
         self._buffer = None
         self.grid = None
+        self.result = None                 # 불확도 계산용 조정 결과
+        self._model = None                 # 미터 -> 원본 픽셀 역변환용
+        self._src_wh = (0, 0)
+        self.click_px = 1.0                # 점 찍기 정밀도 [출력 픽셀]
         self._pts: list[QPointF] = []      # 씬(출력 픽셀) 좌표
         self._cursor = QPointF()
         self.mode = "distance"             # 'distance' | 'area'
@@ -67,6 +74,16 @@ class ResultView(QGraphicsView):
         self._scene.setSceneRect(QRectF(0, 0, w, h))
         self._pts.clear()
         self.fit_to_window()
+
+    def set_context(self, result, params, width: int, height: int) -> None:
+        """측정 불확도를 계산하는 데 필요한 것들.
+
+        길이만 보여 주면 그 값을 어디까지 믿을지 알 수 없다. 보정
+        파라미터의 불확도와 점 찍기 오차를 함께 전파해 ± 로 보여 준다.
+        """
+        self.result = result
+        self._src_wh = (int(width), int(height))
+        self._model = PlaneModel(params, width, height) if params is not None else None
 
     def clear_measure(self) -> None:
         self._pts.clear()
@@ -174,6 +191,20 @@ class ResultView(QGraphicsView):
     def _polyline_m(self) -> np.ndarray:
         return np.array([self.scene_to_meters(p) for p in self._pts], dtype=float)
 
+    def _measure(self, m_xy: np.ndarray, mode: str):
+        """미터 좌표 폴리라인을 불확도까지 붙여 잰다.
+
+        ``measure`` 는 원본 사진 픽셀을 받으므로 역변환해서 넘긴다.
+        """
+        if self._model is None or self._src_wh[0] <= 0:
+            return None
+        pix = self._model.inverse(m_xy)
+        if not np.all(np.isfinite(pix)):
+            return None
+        sigma_pt = self.grid.gsd * self.click_px if self.grid else 0.0
+        return measure(self.result, self._src_wh[0], self._src_wh[1],
+                       pix, mode, sigma_pt=sigma_pt)
+
     def _emit_measure(self) -> None:
         if self.grid is None or len(self._pts) < 2:
             self.measured.emit("")
@@ -181,16 +212,30 @@ class ResultView(QGraphicsView):
         m = self._polyline_m()
         seg = np.linalg.norm(np.diff(m, axis=0), axis=1)
         total = float(seg.sum())
-        if self.mode == "distance":
-            self.measured.emit(f"거리 {total:.3f} m")
+
+        mode = "area" if (self.mode == "area" and len(m) >= 3) else "distance"
+        res = self._measure(m, mode)
+        if res is None:
+            head = (f"면적 {total:.3f} m²" if mode == "area"
+                    else f"거리 {total:.3f} m")
+            self.measured.emit(head)
             return
-        if len(m) >= 3:
-            x, y = m[:, 0], m[:, 1]
-            area = 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+        detail = ""
+        if math.isfinite(res.sigma_model) and math.isfinite(res.sigma_click):
+            # 거리는 mm 가 읽기 좋고, 면적은 mm² 로 바꾸면 자릿수만 커진다.
+            if res.unit == "m2":
+                detail = (f"   [모델 ±{res.sigma_model:.2f} · "
+                          f"클릭 ±{res.sigma_click:.2f} m²]")
+            else:
+                detail = (f"   [모델 ±{res.sigma_model * 1000:.0f} · "
+                          f"클릭 ±{res.sigma_click * 1000:.0f} mm]")
+        if mode == "area":
             per = total + float(np.linalg.norm(m[0] - m[-1]))
-            self.measured.emit(f"면적 {area:.3f} m²   둘레 {per:.3f} m   ({len(m)}점)")
+            self.measured.emit(f"면적 {res.text(2)}   둘레 {per:.3f} m"
+                               f"   ({len(m)}점){detail}")
         else:
-            self.measured.emit(f"길이 {total:.3f} m")
+            self.measured.emit(f"거리 {res.text()}{detail}")
 
     # -------------------------------------------------------------- 오버레이
     def drawForeground(self, painter: QPainter, rect: QRectF) -> None:

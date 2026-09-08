@@ -703,6 +703,9 @@ class MainWindow(QMainWindow):
         self.rect_image = rect
         self.grid = grid
         self.result_view.set_image(rect, grid)
+        self.result_view.set_context(self.result, self.project.params,
+                                     self.project.image_width,
+                                     self.project.image_height)
         self.tabs.setCurrentWidget(self.result_view)
         self.statusBar().showMessage(
             f"보정 결과 생성 완료 — {grid.width} x {grid.height} px, "

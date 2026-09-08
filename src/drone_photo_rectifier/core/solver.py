@@ -49,6 +49,8 @@ __all__ = [
     "initial_params",
     "adjust",
     "distance_with_uncertainty",
+    "Measurement",
+    "measure",
     "Verdict",
     "verdict",
     "OUTLIER_THRESHOLD",
@@ -731,3 +733,123 @@ def verdict(result: "AdjustmentResult | None") -> Verdict:
     if level == "good" and not advice:
         advice.append("[출력] 탭에서 정사영상을 만들고 내보내면 됩니다.")
     return Verdict(level, head, acc, advice)
+
+
+# ------------------------------------------------------- 임의 측정의 불확도
+@dataclass
+class Measurement:
+    """보정 결과 위에서 잰 값과 그 표준불확도.
+
+    불확도는 두 몫으로 나뉜다. 어느 쪽이 큰지 알아야 무엇을 개선할지
+    판단할 수 있어서 따로 들고 다닌다.
+
+    * ``sigma_model`` : 보정 파라미터가 완벽하지 않아서 생기는 몫.
+      실측을 더 넣으면 줄어든다.
+    * ``sigma_click`` : 화면에서 점을 찍는 행위의 몫. 사진 해상도(GSD)가
+      정하며, 실측을 아무리 늘려도 줄지 않는다. 원본 해상도를 쓰거나
+      확대해서 찍어야 줄어든다.
+    """
+
+    value: float
+    sigma: float
+    sigma_model: float
+    sigma_click: float
+    unit: str = "m"
+
+    def text(self, decimals: int = 3) -> str:
+        """``12.340 ± 0.051 m`` 형태의 표시 문자열."""
+        unit = "m²" if self.unit == "m2" else self.unit
+        if not math.isfinite(self.sigma):
+            return f"{self.value:.{decimals}f} {unit}"
+        return f"{self.value:.{decimals}f} ± {self.sigma:.{decimals}f} {unit}"
+
+
+def _polyline_length(xy: np.ndarray) -> float:
+    return float(np.sum(np.linalg.norm(np.diff(xy, axis=0), axis=1)))
+
+
+def _polygon_area(xy: np.ndarray) -> float:
+    x, y = xy[:, 0], xy[:, 1]
+    return 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+
+
+def _click_sigma(xy: np.ndarray, mode: str, sigma_pt: float) -> float:
+    """점 찍기 오차가 측정값에 전파된 몫.
+
+    각 꼭짓점의 위치 오차를 독립이라 보고 1차 전파한다. 예를 들어 두 점
+    사이 거리는 양 끝이 각각 흔들리므로 ``sigma * sqrt(2)`` 가 된다.
+    """
+    if sigma_pt <= 0 or len(xy) < 2:
+        return 0.0
+    n = len(xy)
+    grad = np.zeros_like(xy)
+    if mode == "area":
+        if n < 3:
+            return 0.0
+        for i in range(n):
+            nxt, prv = (i + 1) % n, (i - 1) % n
+            grad[i, 0] = 0.5 * (xy[nxt, 1] - xy[prv, 1])
+            grad[i, 1] = 0.5 * (xy[prv, 0] - xy[nxt, 0])
+    else:
+        seg = np.diff(xy, axis=0)
+        ln = np.linalg.norm(seg, axis=1, keepdims=True)
+        u = np.divide(seg, ln, out=np.zeros_like(seg), where=ln > 1e-12)
+        grad[:-1] -= u
+        grad[1:] += u
+    return float(sigma_pt * math.sqrt(float(np.sum(grad * grad))))
+
+
+def measure(
+    result: "AdjustmentResult | None",
+    width: int,
+    height: int,
+    pix_pts: np.ndarray,
+    mode: str = "distance",
+    sigma_pt: float = 0.0,
+    params: ModelParams | None = None,
+) -> Measurement:
+    """보정 모델로 임의의 거리/면적을 재고 불확도까지 돌려준다.
+
+    Parameters
+    ----------
+    pix_pts
+        원본 사진 픽셀 좌표 (n, 2).
+    mode
+        ``distance`` 면 폴리라인 전체 길이, ``area`` 면 다각형 면적.
+    sigma_pt
+        꼭짓점 하나의 위치 오차 [m]. 정사영상 위에서 찍었다면
+        ``GSD * (클릭 정밀도 픽셀)`` 을 주면 된다.
+    """
+    pix = np.asarray(pix_pts, dtype=np.float64).reshape(-1, 2)
+    unit = "m2" if mode == "area" else "m"
+    pars = params if params is not None else (result.params if result else None)
+    if pars is None or len(pix) < 2:
+        return Measurement(float("nan"), float("nan"), float("nan"), float("nan"), unit)
+
+    def value_of(p: ModelParams) -> float:
+        xy = PlaneModel(p, width, height).forward_xy(pix)
+        if not np.all(np.isfinite(xy)):
+            return float("nan")
+        return _polygon_area(xy) if mode == "area" else _polyline_length(xy)
+
+    value = value_of(pars)
+    xy0 = PlaneModel(pars, width, height).forward_xy(pix)
+    s_click = _click_sigma(xy0, mode, sigma_pt) if np.all(np.isfinite(xy0)) else float("nan")
+
+    s_model = float("nan")
+    if result is not None and result.cov is not None and math.isfinite(value):
+        x0 = pars.to_vector(result.free_names)
+        g = np.zeros(x0.size)
+        for j in range(x0.size):
+            h = 1e-6 * max(1.0, abs(x0[j]))
+            xp, xm = x0.copy(), x0.copy()
+            xp[j] += h
+            xm[j] -= h
+            g[j] = (value_of(pars.with_vector(result.free_names, xp))
+                    - value_of(pars.with_vector(result.free_names, xm))) / (2 * h)
+        if np.all(np.isfinite(g)):
+            s_model = math.sqrt(max(float(g @ result.cov @ g), 0.0))
+
+    parts = [s for s in (s_model, s_click) if math.isfinite(s)]
+    total = math.sqrt(sum(s * s for s in parts)) if parts else float("nan")
+    return Measurement(value, total, s_model, s_click, unit)

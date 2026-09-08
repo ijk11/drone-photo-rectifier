@@ -648,6 +648,26 @@ class MainWindow(QMainWindow):
         if self.image is None or not self.project.solved:
             self._warn("보정을 먼저 실행하세요.")
             return False
+
+        # 판정이 '실패'인데도 그대로 만들면, 찌그러진 그림을 보고 프로그램이
+        # 고장난 줄 안다. 실제로는 잘못된 해를 정직하게 그린 것이다.
+        v = verdict(self.result) if self.result else None
+        if v is not None and v.level == "bad":
+            reply = QMessageBox.warning(
+                self, "보정이 신뢰할 수 없는 상태입니다",
+                f"<b>{v.icon} {v.headline}</b><br><br>"
+                "이 상태로 만들면 결과물이 찌그러지거나 늘어난 모양으로 "
+                "나옵니다. 프로그램 오류가 아니라 잘못된 보정값을 그대로 "
+                "그린 것입니다.<br><br>"
+                "[관측] 탭에서 문제되는 실측을 정리한 뒤 다시 보정하는 것을 "
+                "권합니다.<br><br>그래도 만들까요?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self.right_tabs.setCurrentWidget(self.obs_table)
+                return False
+
         model = self.project.model()
         try:
             grid = plan_grid(model, gsd)

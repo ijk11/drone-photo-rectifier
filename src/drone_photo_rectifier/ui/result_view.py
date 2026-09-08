@@ -52,6 +52,7 @@ class ResultView(QGraphicsView):
         self.mode = "distance"             # 'distance' | 'area'
         self._panning = False
         self._anchor = QPointF()
+        self._needs_fit = False            # 아직 사용자가 배율을 안 건드림
 
         self.setRenderHints(QPainter.RenderHint.Antialiasing
                             | QPainter.RenderHint.SmoothPixmapTransform)
@@ -73,6 +74,7 @@ class ResultView(QGraphicsView):
         item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self._scene.setSceneRect(QRectF(0, 0, w, h))
         self._pts.clear()
+        self._needs_fit = True
         self.fit_to_window()
 
     def set_context(self, result, params, width: int, height: int) -> None:
@@ -124,7 +126,26 @@ class ResultView(QGraphicsView):
         self.centerOn(r.center())
         self.viewport().update()
 
+    def showEvent(self, event) -> None:
+        """탭이 처음 드러날 때 배율을 다시 맞춘다.
+
+        ``fit_to_window`` 는 viewport 크기를 쓰는데, 숨어 있는 탭은 배치가
+        끝나지 않아 크기가 확정되지 않는다. 그 상태에서 맞추면 그림이
+        한 귀퉁이에 작게 박힌 채로 남는다. 사용자가 아직 손대지 않았을
+        때만 다시 맞춘다.
+        """
+        super().showEvent(event)
+        if self._needs_fit:
+            self.fit_to_window()
+            self._needs_fit = False
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._needs_fit:
+            self.fit_to_window()
+
     def wheelEvent(self, event) -> None:
+        self._needs_fit = False
         if self._image is None:
             return
         anchor = self._to_scene(QPointF(event.position()))

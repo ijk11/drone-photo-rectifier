@@ -100,6 +100,7 @@ class ImageView(QGraphicsView):
         self._hover: str | None = None
         self._cursor_scene = QPointF()
         self._cursor_valid = False
+        self._needs_fit = False
         self._dragging: str | None = None
         self._drag_moved = False
         self._panning = False
@@ -134,6 +135,7 @@ class ImageView(QGraphicsView):
         self._pixmap_item = self._scene.addPixmap(QPixmap.fromImage(self._image))
         self._pixmap_item.setTransformationMode(Qt.TransformationMode.SmoothTransformation)
         self._scene.setSceneRect(QRectF(0, 0, w, h))
+        self._needs_fit = True
         self.fit_to_window()
 
     def has_image(self) -> bool:
@@ -217,7 +219,26 @@ class ImageView(QGraphicsView):
         self.centerOn(QPointF(u, v))
         self.viewport().update()
 
+    def showEvent(self, event) -> None:
+        """탭이 처음 드러날 때 배율을 다시 맞춘다.
+
+        ``fit_to_window`` 는 viewport 크기를 쓰는데, 숨어 있는 탭은 배치가
+        끝나지 않아 크기가 확정되지 않는다. 그 상태에서 맞추면 그림이
+        한 귀퉁이에 작게 박힌 채로 남는다. 사용자가 아직 손대지 않았을
+        때만 다시 맞춘다.
+        """
+        super().showEvent(event)
+        if self._needs_fit:
+            self.fit_to_window()
+            self._needs_fit = False
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        if self._needs_fit:
+            self.fit_to_window()
+
     def wheelEvent(self, event) -> None:
+        self._needs_fit = False
         if self._pixmap_item is None:
             return
         anchor_scene = self._to_scene(QPointF(event.position()))

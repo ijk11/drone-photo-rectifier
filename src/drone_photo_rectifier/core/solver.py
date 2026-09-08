@@ -657,15 +657,35 @@ def verdict(result: "AdjustmentResult | None") -> Verdict:
 
     if at_bound:
         labels = ", ".join(at_bound)
-        return Verdict(
-            "bad",
-            f"보정값이 물리적 한계까지 밀려났습니다 ({labels}).",
-            float("nan"),
-            ["관측이 그 값을 결정하지 못해 최적화가 끝까지 밀어붙인 상태입니다.",
-             "실측 선분을 사진 전체에 고르게, 방향을 섞어 추가하세요.",
-             "점을 엉뚱한 곳에 찍었거나 실측값 단위(미터)가 틀리지 않았는지 "
-             "확인하세요.",
-             "이 결과로는 정사영상을 만들지 마세요."])
+        # 배치가 정보를 주고 있는데도 한계에 붙었다면, 부족한 것은 배치가
+        # 아니라 값들의 일관성이다. 둘을 구분하지 않으면 엉뚱한 처방을 준다.
+        informative = (result.rank >= result.n_params
+                       and math.isfinite(result.cond) and result.cond < 1e6)
+        advice = ["이 결과로는 정사영상을 만들지 마세요."]
+        if informative:
+            head = (f"실측값들이 서로 맞지 않아 보정이 한계까지 밀려났습니다 "
+                    f"({labels}).")
+            advice.insert(0, "배치 자체는 정보를 주고 있습니다(rank 충분, 조건수 양호). "
+                             "문제는 값들이 하나의 평면 사진으로 설명되지 않는다는 "
+                             "점입니다.")
+            advice.insert(1, "줄자 값과 클릭한 두 점이 정말 같은 구간인지 "
+                             "하나씩 대조하세요. 특히 선의 어느 가장자리를 "
+                             "쟀는지 확인하세요.")
+            advice.insert(2, "높이가 다른 면(적치물 위, 턱, 경사면)에서 잰 구간이 "
+                             "섞여 있으면 빼세요.")
+            if result.dof < 4:
+                advice.insert(3, f"지금은 잉여관측이 {result.dof}개뿐이라 어느 것이 "
+                                 "틀렸는지 프로그램이 가려낼 수 없습니다. "
+                                 "긴 구간을 4~6개 더 넣으면 자동으로 지목됩니다.")
+        else:
+            head = f"보정값이 물리적 한계까지 밀려났습니다 ({labels})."
+            advice.insert(0, "관측이 그 값을 결정하지 못해 최적화가 끝까지 "
+                             "밀어붙인 상태입니다.")
+            advice.insert(1, "실측 선분을 사진 전체에 고르게, 방향을 섞어 "
+                             "추가하세요.")
+            advice.insert(2, "점을 엉뚱한 곳에 찍었거나 실측값 단위(미터)가 "
+                             "틀리지 않았는지 확인하세요.")
+        return Verdict("bad", head, float("nan"), advice)
 
     n_enabled = sum(1 for s in result.obs_stats if s.enabled)
     widespread = (n_out >= max(2, (n_enabled + 1) // 2)
